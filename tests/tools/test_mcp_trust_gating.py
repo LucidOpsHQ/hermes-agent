@@ -319,6 +319,14 @@ class TestAnnotationCaptureAtDiscovery:
         assert not hints.get("delete_repo")
         assert not hints.get("no_annotations")
 
+    @pytest.mark.parametrize("field", ["read_only_hint", "readOnlyHint"])
+    @pytest.mark.parametrize("value", [True, False, None, "true", 1])
+    def test_sdk_annotation_aliases_fail_closed(self, field, value):
+        annotations = SimpleNamespace(**{field: value})
+        assert _mcp_registration._annotation_read_only_hint(
+            self._make_tool("probe", annotations)
+        ) is (value is True)
+
     def test_dict_annotations_supported(self):
         """Cached/JSON annotations arrive as plain dicts."""
         assert _mcp_registration._annotation_read_only_hint(
