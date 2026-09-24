@@ -82,7 +82,7 @@ FEISHU_WEBSOCKET_AVAILABLE = websockets is not None
 FEISHU_WEBHOOK_AVAILABLE = aiohttp is not None
 
 from gateway.config import Platform, PlatformConfig
-from gateway.platforms.base_exec_approval import EA_HEADER_TEXT, EA_REASON_LABEL_TEXT
+from gateway.platforms.base_exec_approval import EA_REASON_LABEL_TEXT, exec_approval_header
 from gateway.platforms.base import (
     BasePlatformAdapter, ExecApprovalPrompt, SendResult,
     SUPPORTED_DOCUMENT_TYPES, cache_document_from_bytes_async, cache_image_from_url,
@@ -1668,7 +1668,7 @@ class FeishuAdapter(BasePlatformAdapter):
                 _card_button(label, style or "default",
                              {"hermes_action": self._EA_CARD_ACTIONS[choice], "approval_id": approval_id})
                 for label, choice, style in prompt.actions]
-            card = _card(f"⚠️ {EA_HEADER_TEXT}", "orange", prompt.text, actions=actions)
+            card = _card(f"⚠️ {exec_approval_header()}", "orange", prompt.text, actions=actions)
             return await self._send_interactive_card(
                 prompt.chat_id, card, prompt.metadata, "send_exec_approval failed",
                 state_map=self._approval_state, state_id=approval_id, session_key=prompt.session_key,

@@ -19,6 +19,7 @@ except ImportError:
     aiohttp = None  # type: ignore[assignment]
 
 from gateway.config import Platform, PlatformConfig
+from agent.i18n import get_agent_name
 from gateway.platforms.base import gateway_trust_env, BasePlatformAdapter, SendResult
 from gateway.platforms.event import MessageEvent, MessageType
 from gateway.platforms._shared import (
@@ -274,7 +275,7 @@ class HomeAssistantAdapter(BasePlatformAdapter):
         reads from the same WS connection.
         """
         url = f"{self._hass_url}/api/services/persistent_notification/create"
-        payload = {"title": "Hermes Agent", "message": content[:self.MAX_MESSAGE_LENGTH]}
+        payload = {"title": f"{get_agent_name()} Agent", "message": content[:self.MAX_MESSAGE_LENGTH]}
 
         async def _post(session) -> SendResult:
             async with session.post(

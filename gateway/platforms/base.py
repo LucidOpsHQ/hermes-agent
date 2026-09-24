@@ -2589,6 +2589,11 @@ class BasePlatformAdapter(ABC):
         """Chars of command preview that fit; platforms with a hard message cap compute it."""
         return self._EA_CMD_BUDGET
 
+    def _ea_header(self) -> str:
+        from agent.i18n import get_agent_name
+        # This is only the adapter-owned heading, never the command or reason.
+        return self._EA_HEADER.replace("Hermes", self._ea_escape(get_agent_name()))
+
     def _ea_deadline_line(self) -> str:
         """The "doing nothing means it will NOT run" line, with the configured approvals.timeout."""
         return self._EA_DEADLINE_PREFIX + self._ea_escape(format_approval_deadline_line(approval_timeout_seconds()))
@@ -2602,7 +2607,7 @@ class BasePlatformAdapter(ABC):
             description = self._truncate_preview(str(description or ""), self._EA_REASON_BUDGET)
         cmd_preview = self._truncate_preview(
             str(command or ""), self._exec_approval_cmd_budget(description, smart_denied))
-        text = (f"{self._EA_HEADER}"
+        text = (f"{self._ea_header()}"
                 f"{self._EA_CODE_OPEN}{self._ea_escape(cmd_preview)}{self._EA_CODE_CLOSE}"
                 f"{self._EA_REASON_LABEL}{self._ea_escape(description)}"
                 f"{self._ea_deadline_line()}")

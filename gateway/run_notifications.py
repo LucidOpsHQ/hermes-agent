@@ -17,6 +17,7 @@ from contextlib import suppress
 from pathlib import Path
 from typing import Any, Dict, Optional, cast
 
+from agent.i18n import get_agent_name
 from gateway.config import Platform, _BUILTIN_PLATFORM_VALUES
 from gateway.platforms.base import BasePlatformAdapter, _mark_notify_metadata
 from gateway.platforms.event import MessageEvent, MessageType
@@ -849,10 +850,6 @@ class GatewayNotificationsMixin:
         """
         delivered: set[tuple[str, str, Optional[str]]] = set()
         skipped = skip_targets or set()
-        message = "♻️ Gateway online — Hermes is back and ready."
-        free_tier_line = self._free_tier_startup_line()
-        if free_tier_line:
-            message = f"{message}\n{free_tier_line}"
         for platform, platform_cfg, home, transport in self._home_channel_transports():
             if not platform_cfg.gateway_restart_notification:
                 logger.info(
@@ -863,6 +860,11 @@ class GatewayNotificationsMixin:
             target = _notice_target_key(platform.value, home.chat_id, home.thread_id)
             if target in skipped or target in delivered:
                 continue
+            with self._profile_scope_for_source(SessionSource(platform=platform, chat_id=str(home.chat_id))):
+                message = f"♻️ Gateway online — {get_agent_name()} is back and ready."
+                free_tier_line = self._free_tier_startup_line()
+                if free_tier_line:
+                    message = f"{message}\n{free_tier_line}"
             if await self._send_home_channel_message(
                 platform, home, transport, message, "Home-channel startup notification failed for %s:%s: %s",
             ):

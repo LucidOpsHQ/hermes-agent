@@ -22,6 +22,7 @@ import array
 import inspect
 from contextlib import suppress
 import logging
+from agent.i18n import get_agent_name
 import mimetypes
 import os
 import re
@@ -1423,7 +1424,7 @@ class MatrixAdapter(BasePlatformAdapter):
         handoff watcher and the cron seeder mirror that shape rather than the shared ``thread`` slot."""
         if self._client is None:
             return None
-        result = await self.send(parent_chat_id, (name or "").strip() or "Hermes session")
+        result = await self.send(parent_chat_id, (name or "").strip() or f"{get_agent_name()} session")
         root = result.message_id if result.success else None
         if not root:
             return None

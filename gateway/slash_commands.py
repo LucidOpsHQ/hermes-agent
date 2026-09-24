@@ -19,7 +19,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, Union
 
-from agent.i18n import t
+from agent.i18n import get_agent_name, t
 from gateway.config import HomeChannel, Platform, PlatformConfig, persist_home_channel
 from gateway.platforms.base import EphemeralReply
 from gateway.platforms.event import MessageEvent
@@ -43,10 +43,10 @@ _ROLLBACK_SKIP_LINES = (("skipped_user_edits", "gateway.rollback.kept_user_edits
 
 # /busy input modes -> (status-card behavior, set-confirmation behavior).
 _BUSY_MODE_BEHAVIOR = {
-    "queue": ("queues for next turn", "Messages will be queued for the next turn while Hermes is busy."),
+    "queue": ("queues for next turn", "Messages will be queued for the next turn while {agent_name} is busy."),
     "steer": ("steers into current run (after next tool call)",
               "Messages will be steered into the current run (after the next tool call)."),
-    "interrupt": ("interrupts current run", "Messages will interrupt the current run while Hermes is busy."),
+    "interrupt": ("interrupts current run", "Messages will interrupt the current run while {agent_name} is busy."),
 }
 
 # /diff argument -> diff mode (unknown args leave the mode unchanged).
@@ -966,7 +966,8 @@ class GatewaySlashCommandsMixin(
         if adapter is not None:
             adapter._busy_text_mode = self._effective_busy_text_mode(event.source)
         return EphemeralReply(
-            f"Busy input mode set to **`{arg}`** (saved).\n_{_BUSY_MODE_BEHAVIOR[arg][1]}_")
+            f"Busy input mode set to **`{arg}`** (saved).\n_"
+            + _BUSY_MODE_BEHAVIOR[arg][1].format(agent_name=get_agent_name()) + "_")
 
     async def _handle_footer_command(self, event: MessageEvent) -> str:
         """Handle /footer command — toggle the runtime-metadata footer."""

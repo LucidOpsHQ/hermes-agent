@@ -21,6 +21,12 @@ APPROVAL_TIMED_OUT_NOTICE = (
     "Ask me to try again if you still want it, or raise approvals.timeout in config.yaml.")
 
 
+def exec_approval_header() -> str:
+    """Resolve the name only when rendering, including across multiplexed profiles."""
+    from agent.i18n import get_agent_name
+    return EA_HEADER_TEXT.replace("Hermes", get_agent_name(), 1)
+
+
 def approval_timeout_seconds() -> int:
     """The configured ``approvals.timeout`` (default 300s); module attribute so tests can pin it."""
     from tools.approval_context import _get_approval_timeout

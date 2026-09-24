@@ -42,6 +42,7 @@ from gateway.platforms._shared import (
 )
 from gateway.platforms.helpers import MessageDeduplicator
 from gateway.platforms.base_exec_approval import EA_HEADER_TEXT
+from agent.i18n import get_agent_name
 from gateway.platforms.base import (
     gateway_trust_env, BasePlatformAdapter, ExecApprovalPrompt,
     SendResult, SUPPORTED_DOCUMENT_TYPES, SUPPORTED_VIDEO_TYPES, _TEXT_INJECT_EXTENSIONS,
@@ -1858,7 +1859,7 @@ class SlackAdapter(BasePlatformAdapter):
             client = self._get_client(parent_chat_id)
             if client is None:
                 return None
-            seed_text = f":thread: Hermes handoff — *{(name or 'session').strip()[:80]}*"
+            seed_text = f":thread: {get_agent_name()} handoff — *{(name or 'session').strip()[:80]}*"
             result = await client.chat_postMessage(channel=parent_chat_id, text=seed_text)
             ts = _slack_response_payload(result).get("ts")
             return str(ts) if ts else None
@@ -2041,10 +2042,12 @@ class SlackAdapter(BasePlatformAdapter):
         return self._native_task_card_key(chat_id, reply_to, metadata) is not None
 
     async def send_native_task_card_progress(
-        self, chat_id: str, tasks: List[Dict[str, str]], *, title: str = "Hermes is working",
+        self, chat_id: str, tasks: List[Dict[str, str]], *, title: Optional[str] = None,
         reply_to: Optional[str] = None, metadata: Optional[Dict[str, Any]] = None,
         fallback_text: Optional[str] = None) -> SendResult:
         """Start or update a Slack-native plan/task progress stream."""
+        if title is None:
+            title = f"{get_agent_name()} is working"
         if not self._app:
             return SendResult(success=False, error="Not connected")
         if not tasks:
@@ -4792,7 +4795,7 @@ class SlackAdapter(BasePlatformAdapter):
 
     def _exec_approval_cmd_budget(self, description: str, smart_denied: bool) -> int:
         # execute_code approvals embed the whole script, so budget the preview against the cap.
-        fixed = (len(self._EA_HEADER) + len(self._EA_CODE_OPEN) + len(self._EA_CODE_CLOSE)
+        fixed = (len(self._ea_header()) + len(self._EA_CODE_OPEN) + len(self._EA_CODE_CLOSE)
                  + len(self._EA_REASON_LABEL) + len(description) + len("...") + len(self._ea_deadline_line())
                  + (len(self._EA_SMART_DENY_LINE) if smart_denied else 0))
         return max(0, self._EA_SECTION_CAP - fixed)
@@ -6603,7 +6606,7 @@ def _write_slack_manifest_and_instruct() -> None:
         from hermes_cli.slack_cli import _build_full_manifest
         from hermes_constants import get_hermes_home
         manifest = _build_full_manifest(
-            bot_name="Hermes", bot_description="Your Hermes agent on Slack")
+            bot_name=get_agent_name(), bot_description=f"Your {get_agent_name()} agent on Slack")
         target = _Path(get_hermes_home()) / "slack-manifest.json"
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(

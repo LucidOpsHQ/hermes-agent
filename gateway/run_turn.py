@@ -15,7 +15,7 @@ import os
 import queue
 import threading
 import time
-from agent.i18n import t
+from agent.i18n import get_agent_name, t
 from agent.session_activity import format_iteration_progress
 from contextlib import nullcontext, suppress
 from contextvars import copy_context
@@ -1382,7 +1382,7 @@ class GatewayTurnMixin:
             sethome_cmd = "/hermes sethome" if source.platform == Platform.SLACK else "/sethome"
             await self._deliver_platform_notice(
                 source, f"📬 No home channel is set for {platform_name.title()}. "
-                f"A home channel is where Hermes delivers cron job results and cross-platform "
+                f"A home channel is where {get_agent_name()} delivers cron job results and cross-platform "
                 f"messages.\n\nType {sethome_cmd} to make this chat your home channel, or ignore "
                 f"to skip.",
             )

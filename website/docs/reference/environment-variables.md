@@ -8,6 +8,27 @@ description: "Complete reference of all environment variables used by Hermes Age
 
 Hermes reads environment variables from the process environment and, for user-managed secrets, from `~/.hermes/.env`. Keep API keys, bot tokens, OAuth secrets, and other credentials in `.env`; prefer `config.yaml` for non-secret behaviour settings when a config key exists. Some variables below are process-only overrides or internal bridge variables and should not be committed to `.env` just because they are documented here.
 
+## Agent display name (LucidOps fork)
+
+Set `AGENT_NAME=Chase` in each participating profile's `.env` (the active
+`$HERMES_HOME/.env`). Single-profile processes also accept an exported `AGENT_NAME`.
+Unset, empty, or whitespace-only values retain Hermes wording. Names are resolved
+at rendering time through the native profile scope; multiplexed profiles do not
+inherit the launch profile's value. Restart existing services after configuration changes.
+
+This covers command-approval headings and text fallbacks, localized help/status,
+startup/shutdown and topic/resume notices, handoff/task-card labels, busy/pause notices,
+and built-in messaging labels for Slack, Discord, Teams, Feishu, WhatsApp, Matrix,
+email, Google Chat, DingTalk and Home Assistant. Generated Slack manifests use the
+configured name; existing Slack app metadata is not changed remotely. CLI skins inherit
+the name for stock Hermes agent-name, welcome and response-label fields; explicitly
+customized skin copy is preserved. Use a short plain-text display name.
+
+This names the agent, not the underlying software. Commands, protocol IDs, paths,
+URLs, software/update/support references, licensing and user/tool/model content are
+not renamed. Desktop/artwork, third-party plugins, provisioning identities and the
+model persona keep their own configuration. No delivery/authorization logic changes.
+
 ## LLM Providers
 
 | Variable | Description |

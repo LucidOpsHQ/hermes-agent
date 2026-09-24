@@ -262,7 +262,8 @@ from gateway.platforms.helpers import (
 )
 from gateway.platforms.helpers import cancel_task
 from utils import atomic_json_write, env_float
-from gateway.platforms.base_exec_approval import EA_HEADER_TEXT, EA_REASON_LABEL_TEXT
+from gateway.platforms.base_exec_approval import EA_HEADER_TEXT, EA_REASON_LABEL_TEXT, exec_approval_header
+from agent.i18n import get_agent_name
 from gateway.platforms.base import (
     BasePlatformAdapter, ExecApprovalPrompt, SendResult, unauthorized_action_notice,
     cache_image_from_url, cache_image_from_bytes_async, cache_audio_from_url, cache_audio_from_bytes_async,
@@ -4313,7 +4314,7 @@ class DiscordAdapter(DiscordMediaMixin, BasePlatformAdapter):
     def _register_thread_slash(self, tree, name: str, description: str) -> None:
         @tree.command(name=name, description=description)
         @discord.app_commands.describe(
-            name="Thread name", message="Optional first message to send to Hermes in the thread",
+            name="Thread name", message=f"Optional first message to send to {get_agent_name()} in the thread",
             auto_archive_duration="Auto-archive in minutes (60, 1440, 4320, 10080)",
         )
         async def slash_thread(
@@ -4329,6 +4330,8 @@ class DiscordAdapter(DiscordMediaMixin, BasePlatformAdapter):
             return
         tree = self._client.tree
         for name, description, args, template, followup in _NATIVE_SLASH_COMMANDS:
+            if name != "update":
+                description = description.replace("Hermes", get_agent_name())
             if template is None:
                 self._register_thread_slash(tree, name, description)
                 continue
@@ -4493,7 +4496,7 @@ class DiscordAdapter(DiscordMediaMixin, BasePlatformAdapter):
                 _desc, cmd_key = entry
                 await self._run_simple_slash(interaction, f"{cmd_key} {args}".strip())
             cmd = discord.app_commands.Command(
-                name="skill", description="Run a Hermes skill", callback=_skill_handler,
+                name="skill", description=f"Run a {get_agent_name()} skill", callback=_skill_handler,
             )
             tree.add_command(cmd)
             logger.info(
@@ -5158,7 +5161,7 @@ class DiscordAdapter(DiscordMediaMixin, BasePlatformAdapter):
             return self._thread_created(thread, name)
         except Exception as direct_error:
             try:
-                seed_content = starter_message or f"\U0001f9f5 Thread created by Hermes: **{name}**"
+                seed_content = starter_message or f"\U0001f9f5 Thread created by {get_agent_name()}: **{name}**"
                 seed_msg = await parent_channel.send(seed_content)
                 thread = await seed_msg.create_thread(
                     name=name, auto_archive_duration=auto_archive_duration, reason=reason,
@@ -5194,7 +5197,7 @@ class DiscordAdapter(DiscordMediaMixin, BasePlatformAdapter):
         content = re.sub(r"<@[!&]?\d+>", "", content)
         content = re.sub(r"<#\d+>", "", content)
         content = re.sub(r"\s+", " ", content).strip()
-        thread_name = content[:80] if content else "Hermes"
+        thread_name = content[:80] if content else get_agent_name()
         if len(content) > 80:
             thread_name = thread_name[:77] + "..."
         return thread_name
@@ -5228,7 +5231,7 @@ class DiscordAdapter(DiscordMediaMixin, BasePlatformAdapter):
                 last_direct_error = direct_error
                 try:
                     seed_msg = await message.channel.send(
-                        f"\U0001f9f5 Thread created by Hermes: **{thread_name}**"
+                        f"\U0001f9f5 Thread created by {get_agent_name()}: **{thread_name}**"
                     )
                     thread = await seed_msg.create_thread(name=thread_name, auto_archive_duration=1440, reason=reason)
                     return self._stamp_auto_thread_name(thread, thread_name)
@@ -5281,7 +5284,7 @@ class DiscordAdapter(DiscordMediaMixin, BasePlatformAdapter):
         if edit is None:
             return False
         try:
-            await edit(name=cleaned, reason="Hermes semantic session title")
+            await edit(name=cleaned, reason=f"{get_agent_name()} semantic session title")
             logger.info(
                 "[%s] Renamed Discord thread %s from %r to %r",
                 self.name, thread_id, current_name, cleaned,
@@ -5317,7 +5320,7 @@ class DiscordAdapter(DiscordMediaMixin, BasePlatformAdapter):
             )
             return None
         thread_name = (name or "handoff").strip()[:80] or "handoff"
-        reason = "Hermes session handoff"
+        reason = f"{get_agent_name()} session handoff"
         try:
             create = getattr(parent, "create_thread", None)
             if create is not None:
@@ -5332,7 +5335,7 @@ class DiscordAdapter(DiscordMediaMixin, BasePlatformAdapter):
             send = getattr(parent, "send", None)
             if send is None:
                 return None
-            seed_msg = await send(f"\U0001f9f5 Hermes handoff: **{thread_name}**")
+            seed_msg = await send(f"\U0001f9f5 {get_agent_name()} handoff: **{thread_name}**")
             thread = await seed_msg.create_thread(
                 name=thread_name, auto_archive_duration=1440, reason=reason,
             )
@@ -5408,7 +5411,7 @@ class DiscordAdapter(DiscordMediaMixin, BasePlatformAdapter):
 
     def _exec_approval_cmd_budget(self, description: str, smart_denied: bool) -> int:
         # Mentions ride in front of the content and count against the 2000-char message cap too.
-        fixed = (len(self._EA_HEADER) + len(self._EA_CODE_OPEN) + len(self._EA_CODE_CLOSE)
+        fixed = (len(self._ea_header()) + len(self._EA_CODE_OPEN) + len(self._EA_CODE_CLOSE)
                  + len(self._EA_REASON_LABEL) + len(description) + len("...") + len(self._ea_deadline_line())
                  + (len(self._EA_SMART_DENY_LINE) if smart_denied else 0)
                  + len(self._approval_mention_content() or "") + 1)
@@ -5422,7 +5425,7 @@ class DiscordAdapter(DiscordMediaMixin, BasePlatformAdapter):
             if mention_content:
                 content = f"{mention_content}\n{content}"
             embed = discord.Embed(
-                title=f"⚠️ {EA_HEADER_TEXT}",
+                title=f"⚠️ {exec_approval_header()}",
                 description=f"```\n{self._embed_body(prompt.command)}\n```",
                 color=discord.Color.orange(),
             )
@@ -5487,7 +5490,7 @@ class DiscordAdapter(DiscordMediaMixin, BasePlatformAdapter):
 
         def _build(_channel):
             embed = discord.Embed(
-                title="❓ Hermes needs your input",
+                title=f"❓ {get_agent_name()} needs your input",
                 description=self._embed_body(str(question or "").strip()),
                 color=discord.Color.orange(),
             )
@@ -5506,7 +5509,7 @@ class DiscordAdapter(DiscordMediaMixin, BasePlatformAdapter):
                 embed.add_field(name="Reply", value=hint, inline=False)
                 view = None
             content = self._self_contained_prompt_content(
-                "❓ **Hermes needs your input**", str(question or "").strip(), tail=f"\n\n{hint}",
+                f"❓ **{get_agent_name()} needs your input**", str(question or "").strip(), tail=f"\n\n{hint}",
             )
             send_kwargs = {"content": content, "embed": embed}
             if view:
@@ -5912,7 +5915,7 @@ class DiscordAdapter(DiscordMediaMixin, BasePlatformAdapter):
                         # recovers, and skip agent invocation for this message. See #20243.
                         await message.channel.send(
                             self.warning_text(
-                                "⚠️ Hermes could not create a Discord thread for "
+                                f"⚠️ {get_agent_name()} could not create a Discord thread for "
                                 "this message, so the request was not processed. Please retry.",
                                 "The request was not processed. Please retry.")
                         )

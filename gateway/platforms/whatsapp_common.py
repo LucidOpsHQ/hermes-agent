@@ -20,6 +20,7 @@ from typing import Any, Dict, Optional
 
 from gateway.platforms._shared import extra_or_secret as _extra_or_wsecret, get_scoped_secret as _get_wsecret
 from gateway.platforms.access_policy_mixin import OwnAccessPolicyMixin
+from agent.i18n import get_agent_name
 
 
 logger = logging.getLogger(__name__)
@@ -78,7 +79,7 @@ class WhatsAppBehaviorMixin(OwnAccessPolicyMixin):
         env_prefix = _get_wsecret("WHATSAPP_REPLY_PREFIX")
         if env_prefix is not None:
             return env_prefix.replace("\\n", "\n")
-        return self.DEFAULT_REPLY_PREFIX
+        return self.DEFAULT_REPLY_PREFIX.replace("Hermes", get_agent_name())
 
     def _outgoing_chunk_limit(self) -> int:
         """Reserve room for the reply prefix; floor keeps space for pagination/fence repair."""

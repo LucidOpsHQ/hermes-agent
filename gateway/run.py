@@ -563,10 +563,10 @@ def _format_exec_approval_fallback(
     the button card (``BasePlatformAdapter._format_exec_approval``), plus the typed ``/approve``
     steps a surface without buttons needs."""
     from gateway.platforms.base_exec_approval import (
-        EA_HEADER_TEXT, EA_REASON_LABEL_TEXT, approval_timeout_seconds, format_approval_deadline_line)
+        exec_approval_header, EA_REASON_LABEL_TEXT, approval_timeout_seconds, format_approval_deadline_line)
     cmd_preview = command[:200] + "..." if len(command) > 200 else command
     heading = ("⚠️ **Smart DENY — owner override for one operation:**" if smart_denied
-               else f"⚠️ **{EA_HEADER_TEXT}**")
+               else f"⚠️ **{exec_approval_header()}**")
 
     choices = [f"Reply `{command_prefix}approve` to run it once"]
     if not smart_denied and allow_session:

@@ -20,6 +20,8 @@ from contextlib import contextmanager, nullcontext, suppress
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
+from agent.i18n import get_agent_name
+from gateway.session import SessionSource
 from gateway.config import Platform
 from gateway.restart import (
     DEFAULT_GATEWAY_CRON_DRAIN_TIMEOUT, GATEWAY_SERVICE_RESTART_EXIT_CODE, resolve_cron_drain_budget
@@ -848,11 +850,6 @@ class GatewayShutdownMixin:
                 logger.debug("Cron interrupt targets unresolved for %s: %s", job_id, e)
                 continue
             job_name = job.get("name") or job_id
-            msg = (
-                f"⚠️ Scheduled job '{job_name}' was cut short because Hermes is {action}; "
-                "no result this run. It will run again on schedule, or run it now with "
-                f"`hermes cron run {job_name}` once Hermes is back."
-            )
             for target in targets or ():
                 try:
                     platform = Platform(str(target.get("platform", "")).lower())
@@ -869,13 +866,21 @@ class GatewayShutdownMixin:
                 with _log_suppressed(logging.DEBUG, "Cron interrupt notice to %s:%s raised: %s", platform.value, chat_id):
                     metadata = self._thread_metadata_for_target(platform, chat_id, thread_id, adapter=adapter)
                     async def send_notice():
+                        agent_name = get_agent_name()
+                        msg = (
+                            f"⚠️ Scheduled job '{job_name}' was cut short because {agent_name} is {action}; "
+                            "no result this run. It will run again on schedule, or run it now with "
+                            f"`hermes cron run {job_name}` once {agent_name} is back."
+                        )
                         if await self._send_notice_logged(
                             adapter, chat_id, msg, platform.value, "Cron interrupt notice to %s:%s failed: %s",
                             "Cron interrupt notice to %s:%s raised: %s", metadata=metadata,
                         ):
                             notified.add(dedup_key)
                     from gateway.warning_notifications import present_notification
-                    await present_notification(send_notice, platform=platform)
+                    source = SessionSource(platform=platform, chat_id=chat_id, profile=(job.get("origin") or {}).get("profile"))
+                    with self._profile_scope_for_source(source):
+                        await present_notification(send_notice, platform=platform)
         if notified:
             logger.info("Shutdown: delivered %d interrupted-cron-job notice(s)", len(notified))
         return len(notified)
@@ -936,12 +941,12 @@ class GatewayShutdownMixin:
         """
         restart_source = self._restart_command_source if self._restart_requested else None
         msg = (
-            "⚠️ Hermes is shutting down — your current task will be interrupted. "
+            "⚠️ {agent_name} is shutting down — your current task will be interrupted. "
             "When it is back online, send any message and I'll try to pick up where we left off."
         )
         if self._restart_requested:
             msg = (
-                "⚠️ Hermes is restarting — your current task will be interrupted. "
+                "⚠️ {agent_name} is restarting — your current task will be interrupted. "
                 "Send any message after the restart and I'll try to resume where you left off."
             )
         restart_key = None
@@ -986,12 +991,12 @@ class GatewayShutdownMixin:
             # requested outcome of that command and is never suppressed.
             async def _send_active(adapter=adapter, chat_id=chat_id, platform_str=platform_str,
                                    metadata=metadata, dedup_key=dedup_key):
-                if await self._send_shutdown_notice(adapter, chat_id, msg, "active chat", platform_str, metadata=metadata):
+                if await self._send_shutdown_notice(adapter, chat_id, msg.format(agent_name=get_agent_name()), "active chat", platform_str, metadata=metadata):
                     notified.add(dedup_key)
             from gateway.warning_notifications import present_notification
             from gateway.run import _async_profile_runtime_scope
-            scope = (_async_profile_runtime_scope(self._resolve_profile_home_for_source(source))
-                     if source is not None else nullcontext())
+            scope_source = source or SessionSource(platform=platform, chat_id=chat_id, profile=profile)
+            scope = _async_profile_runtime_scope(self._resolve_profile_home_for_source(scope_source))
             async with scope:
                 presented = await present_notification(_send_active, platform=platform, diagnostic=restart_key != dedup_key)
             if not presented:
@@ -1029,12 +1034,13 @@ class GatewayShutdownMixin:
             # Home channels omit ``metadata=`` when empty (adapter doubles may not accept the kwarg).
             async def _send_home(adapter=adapter, home=home, platform=platform, metadata=metadata):
                 if await self._send_shutdown_notice(
-                    adapter, str(home.chat_id), msg, "home channel", platform.value,
+                    adapter, str(home.chat_id), msg.format(agent_name=get_agent_name()), "home channel", platform.value,
                     **({"metadata": metadata} if metadata else {}),
                 ):
                     notified.add(dedup_key)
             from gateway.warning_notifications import present_notification
-            await present_notification(_send_home, platform=platform)
+            with self._profile_scope_for_source(SessionSource(platform=platform, chat_id=str(home.chat_id))):
+                await present_notification(_send_home, platform=platform)
 
     # Agent finalization / resource cleanup
     @staticmethod
