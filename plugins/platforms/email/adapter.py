@@ -29,6 +29,7 @@ from gateway.platforms.helpers import cancel_task
 from gateway.platforms.event import MessageEvent, MessageType
 from gateway.config import Platform, PlatformConfig
 from utils import is_truthy_value
+from agent.i18n import get_agent_name
 from gateway.platforms._shared import get_scoped_secret as _get_secret, coerce_port, send_error
 
 logger = logging.getLogger(__name__)
@@ -669,7 +670,7 @@ class EmailAdapter(BasePlatformAdapter):
                    attach_empty_body: bool = False) -> Tuple[MIMEMultipart, str, str]:
         """Build a threaded reply skeleton. Returns ``(msg, msg_id, subject)``."""
         msg, ctx = MIMEMultipart(), self._thread_context.get(to_addr, {})
-        subject = ctx.get("subject", "Hermes Agent")
+        subject = ctx.get("subject", f"{get_agent_name()} Agent")
         if not subject.startswith("Re:"):
             subject = f"Re: {subject}"
         original_msg_id = reply_to_msg_id or ctx.get("message_id")
@@ -781,7 +782,7 @@ async def _standalone_send(pconfig, chat_id, message, *, thread_id=None, media_f
         return send_error("Email not configured (EMAIL_ADDRESS, EMAIL_PASSWORD, EMAIL_SMTP_HOST required)")
     try:
         msg = MIMEText(message, "plain", "utf-8")
-        for key, value in (("From", address), ("To", chat_id), ("Subject", "Hermes Agent"), ("Date", formatdate(localtime=True))):
+        for key, value in (("From", address), ("To", chat_id), ("Subject", f"{get_agent_name()} Agent"), ("Date", formatdate(localtime=True))):
             msg[key] = value
         server = _open_smtp(smtp_host, smtp_port, smtp_security, _tls_context(smtp_tls_verify, smtp_host), smtplib.SMTP, smtplib.SMTP_SSL)
         server.login(address, password)

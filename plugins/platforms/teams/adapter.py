@@ -57,7 +57,7 @@ from gateway.platforms.base import (
     gateway_trust_env, BasePlatformAdapter, ExecApprovalPrompt, SendResult, cache_image_from_url, cache_media_bytes_async,
 )
 from gateway.platforms.base_exec_approval import (
-    EA_HEADER_TEXT, EA_REASON_LABEL_TEXT, approval_timeout_seconds, format_approval_deadline_line)
+    exec_approval_header, EA_REASON_LABEL_TEXT, approval_timeout_seconds, format_approval_deadline_line)
 from gateway.platforms.event import MessageEvent, MessageType
 from gateway.platforms._shared import (
     coerce_port, get_scoped_secret as _get_scoped_secret, seed_extra_from_env as _seed_extra_from_env, send_error
@@ -327,7 +327,7 @@ def _approval_body(cmd: str, desc: str, *, always: bool = False) -> list:
     """Adaptive Card body blocks for an approval prompt; unless ``always``, empty ``cmd``/``desc`` omit their blocks."""
     body = []
     if cmd or always:
-        body.append(TextBlock(text=f"⚠️ {EA_HEADER_TEXT}", wrap=True, weight="Bolder"))
+        body.append(TextBlock(text=f"⚠️ {exec_approval_header()}", wrap=True, weight="Bolder"))
         body.append(TextBlock(text=f"```\n{cmd}\n```", wrap=True))
     if desc or always:
         body.append(TextBlock(text=f"{EA_REASON_LABEL_TEXT}: {desc}", wrap=True, isSubtle=True))

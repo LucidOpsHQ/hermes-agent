@@ -25,6 +25,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
 from agent.secret_scope import is_multiplex_active
+from agent.i18n import get_agent_name
 from gateway.platforms._shared import (
     get_scoped_secret as _get_scoped_secret, seed_extra_from_env as _seed_extra_from_env, send_error
 )
@@ -1270,7 +1271,7 @@ class GoogleChatAdapter(BasePlatformAdapter):
                 await asyncio.wait_for(self._typing_card_inflight[chat_id].wait(), timeout=5.0)
             return
         thread_id = self._resolve_thread_id(reply_to=None, metadata=metadata, chat_id=chat_id)
-        body = _thread_body(getattr(self.config, "typing_status_text", None) or "Hermes is thinking…", thread_id)
+        body = _thread_body(getattr(self.config, "typing_status_text", None) or f"{get_agent_name()} is thinking…", thread_id)
         self._typing_card_inflight[chat_id] = completed = asyncio.Event()
 
         async def _create_and_record() -> None:

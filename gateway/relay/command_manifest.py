@@ -13,6 +13,7 @@ connector drops invalid entries, never the whole manifest).
 from __future__ import annotations
 
 from typing import Any, Dict, List
+from agent.i18n import get_agent_name
 
 # Discord option type 3 = STRING.
 _STR = 3
@@ -31,7 +32,8 @@ def _opt(name: str, description: str, *, choices: List[str] | None = None) -> Di
 
 
 def _cmd(name: str, description: str, *options: Dict[str, Any]) -> Dict[str, Any]:
-    row: Dict[str, Any] = {"name": name, "description": description}
+    row: Dict[str, Any] = {"name": name, "description": (description if name == "update"
+        else description.replace("Hermes", get_agent_name()))}
     if options:
         row["options"] = list(options)
     return row

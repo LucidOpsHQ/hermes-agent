@@ -14,7 +14,7 @@ import contextlib
 import json
 import os
 import time
-from agent.i18n import t
+from agent.i18n import get_agent_name, t
 from agent.session_activity import format_iteration_progress
 from gateway.config import Platform
 from gateway.platforms.base import EphemeralReply
@@ -887,11 +887,11 @@ class GatewayBusySessionMixin:
         if args.lower() in {"off", "resume", "stop", "disengage"}:
             if estop.disengage():
                 return "▶️ Resumed — new work is accepted again."
-            return "Hermes wasn't paused."
+            return f"{get_agent_name()} wasn't paused."
         state = estop.get_state()
         if state is not None and not args:
             suffix = f" (reason: {state.get('reason')})" if state.get("reason") else ""
-            return f"⏸️ Hermes is already paused{suffix}. Use `/pause off` to resume."
+            return f"⏸️ {get_agent_name()} is already paused{suffix}. Use `/pause off` to resume."
         estop.engage(reason=args or None)
         suffix = f" (reason: {args})" if args else ""
         return (

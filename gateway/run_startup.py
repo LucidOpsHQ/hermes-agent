@@ -18,6 +18,7 @@ from contextlib import suppress
 from contextvars import copy_context
 from datetime import datetime
 from pathlib import Path
+from agent.i18n import get_agent_name
 from gateway.config import Platform
 from gateway.delivery import looks_like_telegram_private_chat_id
 from gateway.platforms.base import BasePlatformAdapter
@@ -1506,9 +1507,10 @@ class GatewayStartupMixin:
         # Fresh thread for the handoff's own scrollback; None when unsupported or creation failed.
         cli_title = row.get("title") or cli_session_id[:8]
         try:
-            new_thread_id = await transport.adapter.create_handoff_thread(
-                home_chat_id, f"Hermes — {cli_title}",
-            )
+            with self._profile_scope_for_source(SessionSource(platform=platform, chat_id=home_chat_id, profile=profile_name)):
+                new_thread_id = await transport.adapter.create_handoff_thread(
+                    home_chat_id, f"{get_agent_name()} — {cli_title}",
+                )
         except Exception as exc:
             logger.debug("Handoff: create_handoff_thread raised on %s: %s", platform_name, exc, exc_info=True)
             new_thread_id = None

@@ -32,7 +32,13 @@ class SkinConfig:
         return self.colors.get(key, fallback)
 
     def get_branding(self, key: str, fallback: str = "") -> str:
-        return self.branding.get(key, fallback)
+        value = self.branding.get(key, fallback)
+        # Keep custom skin copy; rename only inherited Hermes defaults, without
+        # mutating cached skin data shared by renderers/profiles.
+        if key in {"agent_name", "response_label", "welcome"} and value == _HERMES_BRANDING[key]:
+            from agent.i18n import get_agent_name
+            return value.replace("Hermes", get_agent_name())
+        return value
 
     def get_spinner_wings(self) -> List[Tuple[str, str]]:
         """Spinner wing pairs, or empty list if none."""
