@@ -857,10 +857,6 @@ class GatewayNotificationsMixin(GatewayNotificationOwnershipMixin):
         """
         delivered: set[tuple[str, str, Optional[str]]] = set()
         skipped = skip_targets or set()
-        message = t("gateway.startup.online")
-        free_tier_line = self._free_tier_startup_line()
-        if free_tier_line:
-            message = f"{message}\n{free_tier_line}"
         targets = list(self._served_home_channel_transports())
         # A chat already notified for ANOTHER profile is not notified again.
         notified_chats = {
@@ -882,6 +878,13 @@ class GatewayNotificationsMixin(GatewayNotificationOwnershipMixin):
             if chat in notified_chats:
                 delivered.add(target)
                 continue
+            # AGENT_NAME (and display language) are per profile: render under the served profile's scope.
+            with self._profile_scope_for_source(
+                    SessionSource(platform=platform, chat_id=str(home.chat_id), profile=profile)):
+                message = t("gateway.startup.online")
+                free_tier_line = self._free_tier_startup_line()
+                if free_tier_line:
+                    message = f"{message}\n{free_tier_line}"
             if await self._send_home_channel_message(
                 platform, home, transport, message, "Home-channel startup notification failed for %s:%s: %s",
             ):

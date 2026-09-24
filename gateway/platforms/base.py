@@ -2843,6 +2843,17 @@ class BasePlatformAdapter(ABC):
         """Chars of command preview that fit; platforms with a hard message cap compute it."""
         return self._EA_CMD_BUDGET
 
+    def _ea_header(self) -> str:
+        """``_EA_HEADER`` with the AGENT_NAME that ``t()`` substituted escaped for this adapter's markup.
+
+        Only the adapter-owned heading is touched, never the command or reason. Substitution itself
+        happens once in ``agent.i18n.t`` (``gateway.exec_approval.header``), so a name that contains
+        "Hermes" is not rewritten twice."""
+        from agent.i18n import get_agent_name
+        header, name = self._EA_HEADER, get_agent_name()
+        escaped = self._ea_escape(name)
+        return header if escaped == name else header.replace(name, escaped, 1)
+
     def _ea_deadline_line(self) -> str:
         """The "doing nothing means it will NOT run" line, with the configured approvals.timeout."""
         return self._EA_DEADLINE_PREFIX + self._ea_escape(format_approval_deadline_line(approval_timeout_seconds()))
@@ -2858,7 +2869,7 @@ class BasePlatformAdapter(ABC):
             description = self._ea_fit(str(description or ""), self._EA_REASON_BUDGET)
         cmd_preview = self._ea_fit(
             str(command or ""), self._exec_approval_cmd_budget(description, smart_denied))
-        text = (f"{self._EA_HEADER}"
+        text = (f"{self._ea_header()}"
                 f"{self._EA_CODE_OPEN}{self._ea_escape(cmd_preview)}{self._EA_CODE_CLOSE}"
                 f"{self._EA_REASON_LABEL}{self._ea_escape(description)}"
                 f"{self._ea_deadline_line()}")

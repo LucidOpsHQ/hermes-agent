@@ -220,6 +220,53 @@ def get_language() -> str:
     return _resolve_language(_current_home())
 
 
+def get_agent_name(default: str = "Hermes") -> str:
+    """Display name from the current profile, resolved at render time (never cached).
+
+    Like language, AGENT_NAME uses the native scoped .env reader. Missing profile
+    scope under multiplexing remains an error rather than borrowing the launch name.
+    """
+    from agent.secret_scope import get_secret
+    return (get_secret("AGENT_NAME") or "").strip() or default
+
+
+# Only owned presentation copy: software/support/update references stay Hermes.
+# Apply before interpolating arguments so user/session names are never rewritten.
+# Upstream moved the gateway/platform copy into the catalog, so agent-facing labels are keyed here
+# instead of being f-strings at each call site. ``gateway.update.*``, ``gateway.debug.*``,
+# ``gateway.errors.*`` and IRC quit text name the software and deliberately stay Hermes.
+_AGENT_NAME_KEYS = frozenset({
+    "gateway.help.header", "gateway.status.header",
+    "gateway.resume.matrix_blocked_no_origin", "gateway.topic.thread_ready",
+    # Command approval heading (card, text fallback, Discord/Feishu/Teams cards).
+    "gateway.exec_approval.header", "platform.discord.approval.question",
+    # Lifecycle notices.
+    "gateway.startup.online", "gateway.startup.handoff_thread_title",
+    "gateway.shutdown.notice_shutdown", "gateway.shutdown.notice_restart",
+    "gateway.shutdown.cron_interrupted", "gateway.notify.no_home_channel",
+    # Busy / pause.
+    "gateway.busy.behavior_queue_long", "gateway.busy.behavior_interrupt_long",
+    "gateway.pause.not_paused", "gateway.pause.already_paused",
+    # Progress task cards.
+    "gateway.progress.task_card_title", "platform.slack.task_card.title",
+    # Telegram topics.
+    "gateway.topic.default_title", "gateway.topic.root_lobby", "gateway.topic.root_new",
+    "gateway.topic.new_header", "gateway.topic.help", "gateway.topic.system_topic_intro",
+    "gateway.topic.mode_disabled", "gateway.topic.status_how_to",
+    "gateway.topic.restored_last_message",
+    # Discord (native slash descriptions except /update, threads, clarify prompt).
+    "platform.discord.prompt.clarify_title", "platform.discord.command.reset.description",
+    "platform.discord.command.status.description", "platform.discord.command.stop.description",
+    "platform.discord.command.restart.description", "platform.discord.command.thread.description",
+    "platform.discord.command.thread.arg_message", "platform.discord.command.skill.description",
+    "platform.discord.thread.seed_message", "platform.discord.thread.default_name",
+    "platform.discord.thread.handoff_seed", "platform.discord.thread.auto_create_failed",
+    # Other platform labels.
+    "platform.slack.handoff.seed", "platform.matrix.handoff.default_name",
+    "platform.google_chat.typing.thinking", "platform.email.standalone_subject",
+})
+
+
 def t(key: str, lang: str | None = None, **format_kwargs: Any) -> str:
     """Translate a dotted catalog key to the active (or explicit ``lang``) language.
 
@@ -234,18 +281,24 @@ def t(key: str, lang: str | None = None, **format_kwargs: Any) -> str:
     if value is None:
         logger.debug("i18n miss: key=%r lang=%r", key, target)
         value = key
+    unformatted = value
+    if key in _AGENT_NAME_KEYS:
+        value = value.replace("Hermes", "{agent_name}")
+        format_kwargs["agent_name"] = get_agent_name()
+        unformatted = unformatted.replace("Hermes", format_kwargs["agent_name"])
     if not format_kwargs:
         return value
     try:
         return value.format(**format_kwargs)
     except (KeyError, IndexError, ValueError) as exc:
         logger.warning("i18n format failed for key=%r lang=%r kwargs=%r: %s", key, target, format_kwargs, exc)
-        return value
+        return unformatted
 
 
 __all__ = [
     "DEFAULT_LANGUAGE",
     "SUPPORTED_LANGUAGES",
+    "get_agent_name",
     "get_language",
     "language_options",
     "reset_language_cache",
