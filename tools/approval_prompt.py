@@ -296,6 +296,8 @@ def request_elicitation_consent(message: str, description: str, *,
     from tools import approval as _a
     try:
         session_key = _ctx.get_current_session_key()
+        if _ctx.is_approval_cancelled():
+            return "cancel"
     except Exception as exc:  # pragma: no cover -- defensive
         logger.warning("Elicitation consent: session lookup failed: %s", exc)
         return "decline"
@@ -319,7 +321,8 @@ def request_elicitation_consent(message: str, description: str, *,
             decision = _gw._await_gateway_decision(
                 session_key, notify_cb, {"command": message, "description": description,
                                          "pattern_key": "mcp_elicitation",
-                                         "pattern_keys": ["mcp_elicitation"]}, surface=surface)
+                                         "pattern_keys": ["mcp_elicitation"],
+                                         "allow_session": False, "allow_permanent": False}, surface=surface)
         except Exception as exc:
             logger.error("Elicitation gateway dispatch failed: %s", exc, exc_info=True)
             return "decline"
@@ -346,7 +349,7 @@ def request_elicitation_consent(message: str, description: str, *,
         # allow_permanent=False: elicitation is a per-call confirmation — no pattern to remember.
         # Pass the agent thread's panel callback: without it prompt_toolkit fails the prompt closed unseen.
         choice = prompt_dangerous_approval(message, description, timeout_seconds=timeout_seconds,
-                                           allow_permanent=False, title=title,
+                                           allow_permanent=False, allow_session=False, title=title,
                                            approval_callback=_get_approval_callback())
         hook_choice = choice
     except Exception as exc:

@@ -373,6 +373,7 @@ class TestRunsHandlerPrecedence:
                 headers=_headers(KEY),
             )
             assert resp.status in (200, 202)
+            await _await_run(adapter, (await resp.json())["run_id"])
 
         assert seen and seen[0]["session_id"] == "sess-live"
 
@@ -391,6 +392,7 @@ class TestRunsHandlerPrecedence:
                 headers=_headers(KEY),
             )
             assert resp.status in (200, 202)
+            await _await_run(adapter, (await resp.json())["run_id"])
 
         assert seen and seen[0]["session_id"] == "explicit-session"
         # KEY still resolves to its own conversation, never the explicit one.

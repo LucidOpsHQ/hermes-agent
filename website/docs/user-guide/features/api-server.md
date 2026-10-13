@@ -458,6 +458,42 @@ Create a new agent run. Returns a `run_id` that can be used to subscribe to prog
 
 Runs accept a simple `input` string and optional `session_id`, `instructions`, `conversation_history`, or `previous_response_id`. When `session_id` is provided, Hermes surfaces it in the run status so external UIs can correlate runs with their own conversation IDs.
 
+#### Explicit run-scoped YOLO
+
+Clients can feature-detect `features.run_scoped_yolo: true` in
+`GET /v1/capabilities`. After explicit user consent, submit
+`"approval_mode": "yolo"` in the `POST /v1/runs` body. Omit the field when
+YOLO is off: omission preserves the profile's configured approval behavior.
+Only the exact string `"yolo"` is accepted; booleans, `null`, `"off"`, and
+other values return HTTP 400 (`invalid_approval_mode`).
+
+This opt-in requires the full bearer credential for the selected profile.
+Room-grant requests and bodies containing `hosted_room_dispatch` cannot use it
+(HTTP 403, `approval_mode_forbidden`). An `author` display name confers no
+permission. Model/provider selection is independent of the approval mode.
+
+If an existing canonical Bot Chat is held by a live Desktop owner, its mailbox
+cannot carry this run-local permission. A YOLO run targeting that chat fails
+with an explanatory run error before delivering any message to the owner;
+Hermes neither silently drops the requested mode nor starts a second writer.
+Normal (field omitted) live-owner delivery is unchanged.
+
+YOLO uses Hermes's native session approval bypass, keyed to this **run ID**,
+not the conversation's `session_id`. It skips recoverable command, code, and
+tool approval gates, without changing process environment, profile config,
+or permanent allowlists. Native hardline and operator-deny rules remain in
+force; MCP elicitation, payment-card confirmation, protected instruction-file
+writes, and an already-escalated Smart DENY still require human consent via
+`POST /v1/runs/{run_id}/approval` (`once` or `deny`). This is not a sandbox:
+the ordinary native limitations of shell/code execution still apply.
+
+Run status and admission logs record `approval_mode` as `"yolo"` or
+`"configured"`. With an `Idempotency-Key`, this field is durable and changing
+it changes the request fingerprint. Replays do not re-enable a finished run.
+The bypass is revoked on stop, cancellation, failure, completion, and shutdown;
+late executor/tool contexts cannot regain approval authority. Executor work
+continues to count toward concurrency/drain limits until its thread exits.
+
 For safely retryable creation, send an `Idempotency-Key` header (1–255 visible ASCII characters). Hermes durably reserves the key before starting work. An identical retry returns the original `run_id` with HTTP 202 and `Idempotency-Replayed: true`, including after a gateway restart and after the run has completed, failed, or been cancelled. Reusing the same key with a different JSON payload returns HTTP 409 with code `idempotency_key_conflict`. Keys are isolated by authenticated API profile/credential and retained for 24 hours after their last status update; clients should use unique, unguessable keys and must not reuse them for unrelated operations. Requests without the header retain the legacy behavior and always create a new run.
 
 When `session_id` identifies an existing Hermes session and no explicit

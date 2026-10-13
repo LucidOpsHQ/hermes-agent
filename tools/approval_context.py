@@ -8,6 +8,7 @@ gate in :mod:`tools.approval`.
 import contextvars
 import logging
 import os
+import threading
 from agent.i18n import t
 from hermes_cli.config import cfg_get
 from utils import env_var_enabled, is_truthy_value
@@ -22,6 +23,10 @@ def _ctx(name: str, default: "str | None" = "") -> contextvars.ContextVar:
 # Per-thread/per-task gateway session identity: gateway runs agent turns concurrently in executor threads, so a
 # process-global env var is racy (the env fallback stays for legacy single-threaded callers).
 _approval_session_key: contextvars.ContextVar[str] = _ctx("approval_session_key")
+# The shared event survives copy_context(): cancelling an API task does not
+# stop its executor, and revocation must outlive the adapter's live tables.
+_approval_cancel_event: contextvars.ContextVar[threading.Event | None] = contextvars.ContextVar(
+    "approval_cancel_event", default=None)
 _approval_turn_id: contextvars.ContextVar[str] = _ctx("approval_turn_id")
 _approval_tool_call_id: contextvars.ContextVar[str] = _ctx("approval_tool_call_id")
 # Hermes session id (observability identity, distinct from the gateway routing session_key), forwarded to approval
@@ -81,6 +86,20 @@ def set_current_session_key(session_key: str) -> contextvars.Token[str]:
 def reset_current_session_key(token: contextvars.Token[str]) -> None:
     """Restore the prior approval session key context."""
     _approval_session_key.reset(token)
+
+
+def set_approval_cancel_event(event: threading.Event) -> contextvars.Token:
+    """Bind a run-lifetime fence inherited by its tool worker contexts."""
+    return _approval_cancel_event.set(event)
+
+
+def reset_approval_cancel_event(token: contextvars.Token) -> None:
+    _approval_cancel_event.reset(token)
+
+
+def is_approval_cancelled() -> bool:
+    event = _approval_cancel_event.get()
+    return event is not None and event.is_set()
 
 
 _Tokens = tuple[contextvars.Token[str], contextvars.Token[str], contextvars.Token[str]]

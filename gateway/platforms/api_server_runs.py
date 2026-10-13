@@ -10,7 +10,8 @@ import time
 import uuid
 from collections import deque
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 try:
@@ -225,6 +226,8 @@ def _initialize_run_state(self, *, store_factory) -> None:
     self._stopping_run_ids: set[str] = set()
     self._shutdown_interrupted_run_ids: set[str] = set()
     self._run_shutdown_requested_at: Optional[float] = None
+    self._run_launches: dict[str, _RunLaunch] = {}
+    self._active_run_workers: dict[str, asyncio.Future] = {}
     (
         self._run_owners, self._run_streams, self._run_streams_created, self._active_run_agents,
         self._active_run_tasks, self._run_statuses, self._run_approval_sessions,
@@ -501,6 +504,9 @@ class _RunLaunch:
     browser_control_principal: Any
     browser_control_transport_family: Any
     turn_author: Optional[Dict[str, Any]] = None  # memory-attribution label only; grants nothing
+    approval_mode: Optional[str] = None
+    approval_cancelled: threading.Event = field(default_factory=threading.Event)
+    live_owner_eligible: bool = False
 
     @property
     def approval_session_key(self) -> str:
@@ -520,10 +526,46 @@ def _forget_run(self, run_id: str, *tables) -> None:
     self._release_run_owner_if_forgotten(run_id)
 
 
+def _active_run_work_count(self) -> int:
+    """Count queued tasks and live executor workers once, including cancelled tasks."""
+    return len({run_id for table in (self._active_run_tasks, self._active_run_workers)
+                for run_id, future in table.items() if not future.done()})
+
+
 def _retire_live_run(self, run_id: str) -> None:
     """Retire agent/task/approval control state once the executor-backed task is done."""
+    worker = self._active_run_workers.get(run_id)
+    if worker is not None and not worker.done():
+        return  # Cancelling the asyncio task cannot stop its executor thread.
     _forget_run(self, run_id, self._active_run_agents, self._active_run_tasks, self._run_approval_sessions,
-                self._stopping_run_ids, self._shutdown_interrupted_run_ids)
+                self._stopping_run_ids, self._shutdown_interrupted_run_ids,
+                self._run_launches, self._active_run_workers)
+
+
+def _revoke_run_approvals(self, run_id: str) -> None:
+    """Close authority immediately, even when a queued/blocked worker outlives its task."""
+    from tools.approval import disable_session_yolo, unregister_gateway_notify
+    run = self._run_launches.get(run_id)
+    if run is not None:
+        run.approval_cancelled.set()  # Copied contexts retain this fence after live tables retire.
+    # Permission-dependent resources (e.g. computer-use) are profile-scoped.
+    with self._profile_scope(run.request_profile if run is not None else None):
+        disable_session_yolo(run_id)
+        unregister_gateway_notify(run_id)
+
+
+def _run_task_finished(self, run: _RunLaunch, task) -> None:
+    self._background_tasks.discard(task)
+    if (task.cancelled() and self._run_launches.get(run.run_id) is run
+            and run.run_id not in self._active_run_workers):
+        # A task cancelled before its first step never enters _execute_run's
+        # finally. No worker/tool ran, but its admission still needs retiring.
+        _revoke_run_approvals(self, run.run_id)
+        status = "interrupted" if run.run_id in self._shutdown_interrupted_run_ids else "cancelled"
+        self._set_run_status(run.run_id, status, last_event=f"run.{status}")
+        run.put_event(_run_event(run.run_id, f"run.{status}"))
+        run.put_event(None)
+        _retire_live_run(self, run.run_id)
 
 
 def _drop_run_transport(self, run_id: str) -> None:
@@ -617,6 +659,53 @@ async def run_internal_session_turn(self, *, session_id: str, text: str, profile
             _api_server._api_request_profile.reset(token)
 
 
+def _run_approval_mode_error(self, request, body, *, _openai_error):
+    """Only an explicit full-profile, non-room request may opt in to YOLO."""
+    if not isinstance(body, dict):
+        return _json_error(_openai_error, "JSON body must be an object", status=400)
+    if "approval_mode" not in body:
+        return None
+    if body["approval_mode"] != "yolo":
+        return _json_error(_openai_error, "'approval_mode' must be exactly 'yolo' or omitted",
+                           code="invalid_approval_mode", status=400)
+    # An author label or a full bearer alongside room policy never enlarges
+    # that room's authority. Even a null dispatch/policy field is forbidden.
+    if (self._room_grant_token(request) or "hosted_room_dispatch" in body
+            or "_room_execution_policy" in body or not self._expected_api_key()):
+        return _json_error(_openai_error, "Run-scoped YOLO requires a full profile bearer and a non-room run",
+                           code="approval_mode_forbidden", status=403)
+    return self._check_auth(request)
+
+
+async def _admit_to_live_bot_chat(
+    self, session_id: str, message: Any, author: Optional[Dict[str, Any]], *, require_run_local: bool = False,
+) -> Optional[Tuple[Path, Dict[str, Any]]]:
+    """Admit to the canonical Bot Chat's live single writer, or return None to run here.
+
+    Both peer transports share this lookup; a run-local permission cannot be
+    forwarded because the owner's mailbox carries no such authority.
+    """
+    if not isinstance(message, str):
+        return None
+    db = await self._ensure_session_db_async()
+    if db is None:
+        return None
+    home = Path(db.db_path).parent
+    from tools.bot_live_delivery import deliver_to_live_owner, find_canonical_live_owner
+
+    def _admit() -> Optional[Dict[str, Any]]:
+        owner = find_canonical_live_owner(home)
+        # Only the canonical Bot Chat's own lineage: every other session runs here.
+        if owner is None or db.get_compression_tip(session_id) != owner["session_id"]:
+            return None
+        if require_run_local:
+            raise RuntimeError("Run-scoped YOLO is unavailable for a live Bot Chat owned by another executor.")
+        return deliver_to_live_owner(home, owner, message, author=author)
+
+    record = await asyncio.to_thread(_admit)
+    return None if record is None else (home, record)
+
+
 async def _handle_runs(self, request: "web.Request", *, _api_server) -> "web.Response":
     """POST /v1/runs — start an agent run, return run_id immediately."""
     _openai_error = _api_server._openai_error
@@ -628,6 +717,10 @@ async def _handle_runs(self, request: "web.Request", *, _api_server) -> "web.Res
         body = await request.json()
     except Exception:
         return _json_error(_openai_error, "Invalid JSON", status=400)
+    mode_error = _run_approval_mode_error(self, request, body, _openai_error=_openai_error)
+    if mode_error is not None:
+        return mode_error
+    approval_mode = body.get("approval_mode")
     body, room_error = await self._normalize_room_dispatch(request, body)
     if room_error is not None:
         return room_error
@@ -716,7 +809,8 @@ async def _handle_runs(self, request: "web.Request", *, _api_server) -> "web.Res
     created_at = self._run_streams_created[run_id] = time.time()
     self._run_approval_sessions[run_id] = run_id  # approval session key (see _RunLaunch)
     initial_status = self._set_run_status(
-        run_id, "queued", created_at=created_at, session_id=session_id, model=body.get("model", self._model_name))
+        run_id, "queued", created_at=created_at, session_id=session_id, model=body.get("model", self._model_name),
+        approval_mode=approval_mode or "configured")
     if idempotency_key:
         outcome, record = self._run_idempotency_store.reserve(
             idempotency_scope, idempotency_key, idempotency_fingerprint, run_id, initial_status,
@@ -738,21 +832,18 @@ async def _handle_runs(self, request: "web.Request", *, _api_server) -> "web.Res
         request_profile=_api_server._api_request_profile.get(),
         browser_control_principal=_api_server._api_request_browser_control_principal.get(),
         browser_control_transport_family=_api_server._api_request_browser_control_transport_family.get(),
-        turn_author=turn_author)
+        turn_author=turn_author, approval_mode=approval_mode,
+        live_owner_eligible=bool(selected_session_id))
+    self._run_launches[run_id] = launch
+    logger.info("[api_server] admitted run=%s approval_mode=%s", run_id, approval_mode or "configured")
     self._activate_admitted_request()
-    # A canonical Bot Chat that a Desktop holds live is that Desktop's to run: executing here would
-    # be a second writer beside its lease (#114959). The owner's mailbox takes the turn and its
-    # receipt drives this run's status, so `peer run` keeps its run_id and `peer status` still works.
-    admitted = await self._admit_to_live_bot_chat(session_id, user_message, turn_author) if selected_session_id else None
-    if admitted is not None:
-        task = self._active_run_tasks[run_id] = asyncio.create_task(
-            _execute_run_via_live_owner(self, launch, *admitted, _api_server=_api_server))
-    else:
-        task = self._active_run_tasks[run_id] = asyncio.create_task(_execute_run(self, launch, _api_server=_api_server))
+    # Track before any live-owner lookup awaits: cancellation during dispatch must
+    # settle the admission and shutdown must still count the pending work.
+    task = self._active_run_tasks[run_id] = asyncio.create_task(_execute_run(self, launch, _api_server=_api_server))
     with suppress(TypeError):
         self._background_tasks.add(task)  # tracked for shutdown drain
     if hasattr(task, "add_done_callback"):
-        task.add_done_callback(self._background_tasks.discard)
+        task.add_done_callback(lambda finished: _run_task_finished(self, launch, finished))
     return _accepted_response(run_id, "started", gateway_session_key, replayed=False)
 
 
@@ -789,16 +880,21 @@ def _run_agent_sync(self, run: _RunLaunch, agent, approval_notify, *, _api_serve
     # a config with a few stdio servers — even for sessions that never run a worker-routed command. Sessions
     # held by a live transport are never reaped, so with the desktop app open for days those fleets
     # accumulate until the OS refuses new process spawns.
-    from tools.approval import register_gateway_notify, unregister_gateway_notify
-    from tools.approval_context import reset_current_session_key, set_current_session_key
+    from tools.approval import clear_session, register_gateway_notify, unregister_gateway_notify
+    from tools.approval_context import (
+        reset_current_session_key, set_current_session_key,
+        reset_approval_cancel_event, set_approval_cancel_event)
     session_id = run.session_id
     effective_task_id = session_id or run.run_id
     # (token, reset) pairs unwound in the finally block; bound only once each step succeeds.
     resets: list[tuple[Any, Callable]] = []
     with self._profile_scope(run.request_profile):
         try:
+            if run.approval_cancelled.is_set():
+                return {"interrupted": True}, {}, {}
             # Contextvars, not process env: concurrent runs must not share identity.
             resets.append((set_current_session_key(run.approval_session_key), reset_current_session_key))
+            resets.append((set_approval_cancel_event(run.approval_cancelled), reset_approval_cancel_event))
             # chat_id carries the raw session id like _run_agent() does; without it
             # tools.async_delegation sees no HERMES_SESSION_CHAT_ID and forces delegations sync.
             session_tokens = self._bind_api_server_session(
@@ -831,32 +927,45 @@ def _run_agent_sync(self, run: _RunLaunch, agent, approval_notify, *, _api_serve
                 user_message=run.user_message, conversation_history=run.conversation_history,
                 task_id=effective_task_id, **author_kwargs)
         finally:
-            # Clear ownership now so a later stop can't reap work this run left running.
-            _api_server._clear_turn_process_ownership(agent)
-            self._memory_sessions.checkin(agent)
-            # Declared-conversation binding, same precedence gate as _run_agent.
-            if run.declared_selected:
-                self._bind_declared_conversation(
-                    getattr(agent, "session_id", None) or session_id, run.gateway_session_key)
+            # Task cancellation does not join this thread. Descendant tool
+            # contexts may outlive even this finally and must stay revoked.
+            run.approval_cancelled.set()
             try:
-                unregister_gateway_notify(run.approval_session_key)
+                clear_session(run.approval_session_key)
+                _api_server._clear_turn_process_ownership(agent)
+                self._memory_sessions.checkin(agent)
+                # Declared-conversation binding, same precedence gate as _run_agent.
+                if run.declared_selected:
+                    self._bind_declared_conversation(
+                        getattr(agent, "session_id", None) or session_id, run.gateway_session_key)
             finally:
-                for token, reset in resets:
-                    with suppress(Exception):
-                        reset(token)
+                try:
+                    unregister_gateway_notify(run.approval_session_key)
+                finally:
+                    for token, reset in reversed(resets):
+                        with suppress(Exception):
+                            reset(token)
         return r, _run_usage(agent), _served_runtime(agent)
 
 
 def _make_approval_notify(self, run: _RunLaunch, *, _api_server) -> Callable[[Dict[str, Any]], None]:
     """Approval-request bridge: redact, stamp the event envelope, park the run status, enqueue."""
-    run_id, q, loop = run.run_id, run.queue, asyncio.get_running_loop()
+    run_id, loop = run.run_id, asyncio.get_running_loop()
 
     def _approval_notify(approval_data: Dict[str, Any]) -> None:
+        if run.approval_cancelled.is_set():
+            raise RuntimeError("Run approval scope is closed")
         # Clients must never receive the raw flagged command (#48456): the shared builder redacts.
         event = _api_server._approval_request_event(run_id, approval_data)
-        self._set_run_status(run_id, "waiting_for_approval", last_event="approval.request", approval=event)
-        with suppress(Exception):
-            loop.call_soon_threadsafe(q.put_nowait, event)
+        def publish() -> None:
+            # Serialize publication with /stop and task cancellation on the loop;
+            # rendering/redaction in this worker may have raced revocation.
+            if run.approval_cancelled.is_set():
+                return
+            self._set_run_status(run_id, "waiting_for_approval", last_event="approval.request", approval=event)
+            run.put_event(event)
+
+        loop.call_soon_threadsafe(publish)
 
     return _approval_notify
 
@@ -907,6 +1016,7 @@ async def _execute_run_via_live_owner(self, run: _RunLaunch, home, record: Dict[
         logger.exception("[api_server] run %s (live Bot Chat) failed", run_id)
         _finish("failed", completed=False, partial=False, interrupted=False, error=str(exc))
     finally:
+        _revoke_run_approvals(self, run_id)
         with suppress(Exception):
             run.put_event(None)  # sentinel: close the SSE stream
         _retire_live_run(self, run_id)
@@ -953,18 +1063,49 @@ async def _execute_run(self, run: _RunLaunch, *, _api_server) -> None:
         if run_id in self._shutdown_interrupted_run_ids:
             _finish("interrupted")
             return
+        if run.approval_cancelled.is_set() or run_id in self._stopping_run_ids:
+            _finish("cancelled")
+            return
+        # Preserve the live Bot Chat's single writer. Its mailbox does not carry
+        # run-local approval authority: reject YOLO before delivering, never
+        # silently downgrade it or run a second writer beside the Desktop lease.
+        if run.live_owner_eligible:
+            admitted = await self._admit_to_live_bot_chat(
+                run.session_id, run.user_message, run.turn_author,
+                require_run_local=run.approval_mode == "yolo")
+            if run.approval_cancelled.is_set():
+                _finish("cancelled")
+                return
+            if admitted is not None:
+                await _execute_run_via_live_owner(self, run, *admitted, _api_server=_api_server)
+                return
         self._set_run_status(run_id, "running")
-        if run_id in self._stopping_run_ids:
+        if run.approval_cancelled.is_set() or run_id in self._stopping_run_ids:
             _finish("cancelled")
             return
         with self._profile_scope(run.request_profile):
+            if run.approval_mode == "yolo":
+                # Only the event-loop owner enables authority; a late executor
+                # must never be able to re-enable a stopped or cancelled run.
+                from tools.approval import enable_session_yolo
+                enable_session_yolo(run.run_id)
             agent = self._create_agent(
                 stream_delta_callback=_text_cb, tool_progress_callback=self._make_run_event_callback(run_id, loop),
                 interim_assistant_callback=_interim_cb, **run.agent_kwargs)
         self._active_run_agents[run_id] = agent
         approval_notify = _make_approval_notify(self, run, _api_server=_api_server)
-        result, usage, served_runtime = await _submit_api_worker(
+        worker = self._active_run_workers[run_id] = _submit_api_worker(
             loop, lambda: _run_agent_sync(self, run, agent, approval_notify, _api_server=_api_server))
+
+        def worker_finished(future):
+            # Consume late exceptions after cancellation; retire on real worker exit.
+            if not future.cancelled():
+                future.exception()
+            if run_id in self._active_run_tasks and self._active_run_tasks[run_id].done():
+                _retire_live_run(self, run_id)
+
+        worker.add_done_callback(worker_finished)
+        result, usage, served_runtime = await asyncio.shield(worker)
         # Publish request metrics (daily counters + latency) with each completed run (#52323).
         self._record_api_metrics(usage, time.perf_counter() - _run_started_at)
         if not isinstance(result, dict):
@@ -985,6 +1126,12 @@ async def _execute_run(self, run: _RunLaunch, *, _api_server) -> None:
                               else "raw_request" if any(requested.values()) else "global"))
             _finish(status, fields, output=result.get("final_response", ""), usage=usage, runtime=served_runtime)
     except asyncio.CancelledError:
+        _revoke_run_approvals(self, run_id)
+        agent = self._active_run_agents.get(run_id)
+        if agent is not None:
+            with suppress(Exception):
+                _api_server.request_hard_interrupt(agent, "Run task cancelled")
+            _api_server._reap_disconnected_agent_processes(agent, source="api_server_run_cancel")
         _finish("cancelled")
         raise
     except _api_server._ProviderAuthResolutionError as exc:
@@ -997,7 +1144,10 @@ async def _execute_run(self, run: _RunLaunch, *, _api_server) -> None:
     finally:
         # On cancellation (/stop) the executor thread may still block on an approval
         # Event; unregistering releases it. Idempotent on normal completion.
-        _unregister_approval_notify(run.approval_session_key)
+        _revoke_run_approvals(self, run_id)
+        from tools.approval import clear_session
+        with self._profile_scope(run.request_profile):
+            clear_session(run.approval_session_key)
         with suppress(Exception):
             loop.call_soon(run.put_event, None)  # close after the queued events
         _retire_live_run(self, run_id)
@@ -1265,6 +1415,7 @@ async def _handle_stop_run(self, request: "web.Request", *, _api_server) -> "web
             code="run_not_active", status=409)
     self._set_run_status(run_id, "stopping", last_event="run.stopping")
     self._stopping_run_ids.add(run_id)
+    _revoke_run_approvals(self, run_id)
     if agent is not None:
         with suppress(Exception):
             _api_server.request_hard_interrupt(agent, "Stop requested via API")
