@@ -484,7 +484,9 @@ def is_approval_bypass_active_for_session(session_key: str) -> bool:
     """Canonical three-source bypass check: process ``--yolo`` (frozen at import), the
     session-scoped gateway ``/yolo`` toggle, ``approvals.mode: off``. Pure bypass
     sub-expression only — hardline blocklist / permanent allowlist are the caller's job."""
-    return (_YOLO_MODE_FROZEN or is_session_yolo_enabled(session_key) or approval_context._get_approval_mode() == "off")
+    return (not approval_context.is_approval_cancelled()
+            and (_YOLO_MODE_FROZEN or is_session_yolo_enabled(session_key)
+                 or approval_context._get_approval_mode() == "off"))
 
 
 def is_approval_bypass_active() -> bool:
@@ -495,6 +497,9 @@ def is_approval_bypass_active() -> bool:
 # --- Result builders shared by the gates ----------------------------------------------------------------------------
 
 def _approved() -> dict:
+    if approval_context.is_approval_cancelled():
+        return {"approved": False, "message": "BLOCKED: this run has stopped; no further action is authorized.",
+                "outcome": "cancelled", "user_consent": False}
     return {"approved": True, "message": None}
 
 
@@ -532,6 +537,8 @@ def _blocked(message: str, *, pattern_key: str, description: str) -> dict:
 def _user_approved(session_key: str, description: str) -> dict:
     """A human approval (incl. ESCALATE-then-approve or a smart-DENY owner
     override) resets the consecutive-denial tally."""
+    if approval_context.is_approval_cancelled():
+        return _approved()
     _reset_denials(session_key)
     return {"approved": True, "message": None, "user_approved": True, "description": description}
 
@@ -752,6 +759,8 @@ def _smart_gate(spec: _GateSpec, command: str, description: str, pattern_key: st
     """
     verdict = _smart_verdict(command, description, pattern_key, pattern_keys, session_key)
     if verdict == "approve":
+        if approval_context.is_approval_cancelled():
+            return _approved(), False
         _reset_denials(session_key)
         logger.debug(spec.smart_log.format(command=command[:60], description=description, session_key=session_key))
         return {"approved": True, "message": None, "smart_approved": True, "description": description}, False
@@ -802,6 +811,8 @@ def _human_decision(spec: _GateSpec, *, command: str, description: str,
                        outcome=outcome, noun=spec.noun, **extra)
 
     def grant(choice: str) -> dict:
+        if approval_context.is_approval_cancelled():
+            return _approved()
         # A smart-DENY owner override is always one operation, even if an older client returns "session" or "always".
         if not smart_denied:
             _persist_choice(session_key, choice, pattern_keys)
@@ -946,7 +957,7 @@ def _run_approval_gate(
     # ``approvals.mode: off`` is the third bypass source (the Desktop "Approvals: off" toggle writes it); the shell
     # guards honour it, so every action routed through this gate (computer_use, plugin rules, SSH-config writes,
     # dangerous-pattern prompts) must too, or "off" still prompts on those surfaces.
-    if _yolo_active() or approval_context._get_approval_mode() == "off":
+    if approval_context.is_approval_cancelled() or _yolo_active() or approval_context._get_approval_mode() == "off":
         return _approved()
     session_key = get_current_session_key()
     if is_approved(session_key, pattern_key):
@@ -1057,6 +1068,8 @@ def check_dangerous_command(command: str, env_type: str,
     """Detect a dangerous command and handle approval (pattern layer only). ``has_host_access``:
     a Docker sandbox that bind-mounts host paths must not skip approval.
     Returns ``{"approved": True/False, "message": str or None, ...}``."""
+    if approval_context.is_approval_cancelled():
+        return _approved()
     if _should_skip_container_guards(env_type, has_host_access=has_host_access):
         return _user_deny_block(command) or _approved()
     blocked = _floor_block(command)
@@ -1113,6 +1126,8 @@ def check_all_command_guards(command: str, env_type: str,
     """Run all pre-exec security checks and return a single approval decision. Plugins that
     want to veto or escalate a command do it from ``pre_tool_call``.
     ``has_host_access``: a Docker sandbox with bind-mounted host paths takes the normal flow."""
+    if approval_context.is_approval_cancelled():
+        return _approved()
     if _should_skip_container_guards(env_type, has_host_access=has_host_access):
         return _user_deny_block(command) or _approved()
 
@@ -1174,6 +1189,8 @@ def check_execute_code_guard(code: str, env_type: str, has_host_access: bool = F
     arbitrary code headlessly without any approval surface is trusted-by-config (set a gateway/ask surface
     or ``approvals.cron_mode`` to require approval). See #30882.
     """
+    if approval_context.is_approval_cancelled():
+        return _approved()
     pattern_key = "execute_code"
     description = _EXECUTE_CODE_DESCRIPTION
 

@@ -62,7 +62,7 @@ def _poll_event(event: threading.Event, session_key: str, *, interrupt_log: str)
             # The poll loop below is verifiably blocked on a human answer (the user tapping approve/deny on
             # the gateway surface), bounded by the approval timeout. Record it as human-wait time so the
             # concurrent batch deadline excludes it (#79719).
-            if is_interrupted():
+            if _ctx.is_approval_cancelled() or is_interrupted():
                 logger.info(interrupt_log, session_key)
                 return "interrupted"
             remaining = deadline - time.monotonic()
@@ -146,6 +146,9 @@ def _await_gateway_decision(session_key: str, notify_cb, approval_data: dict, *,
     from tools import approval as _approval
     from agent.terminal_approval_batch import approval_published, preparing_terminal_approval, register_prepared_approval
 
+    if _ctx.is_approval_cancelled():
+        return {"resolved": False, "choice": None, "reason": None, "cancelled": "run stopped"}
+
     primary_key = approval_data.get("pattern_key", "")
     payload = {
         "command": approval_data.get("command", ""),
@@ -214,6 +217,8 @@ def _await_gateway_decision(session_key: str, notify_cb, approval_data: dict, *,
 
         state = _poll_event(entry.event, session_key,
                             interrupt_log="Approval wait interrupted — returning deny for session %s")
+        if _ctx.is_approval_cancelled():
+            state = "interrupted"
         cancelled = _cancel_cause(state, entry)
         if state == "interrupted":
             # Coalesced followers wake with the cause instead of a deny nobody issued.

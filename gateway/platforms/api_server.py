@@ -1271,7 +1271,7 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
         try:
             return (int(getattr(self, "_pending_agent_requests", 0))
                     + int(self._inflight_agent_runs)
-                    + sum(not task.done() for task in self._active_run_tasks.values()))
+                    + _api_runs._active_run_work_count(self))
         except Exception:
             return 0
 
@@ -1281,8 +1281,14 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
         run_ids = {
             run_id for run_id, task in self._active_run_tasks.items() if not task.done()
         } | set(self._active_run_agents)
+        # A just-cancelled admission may not have run its done callback yet.
+        # Keep shutdown's interrupted outcome until that callback retires it.
+        run_ids.update(run_id for run_id in self._run_launches
+                       if self._run_statuses.get(run_id, {}).get("status") not in _api_runs.TERMINAL_STATUSES)
         _api_runs._mark_shutdown_interrupted_runs(self, run_ids)
         # Dedupe by identity: an agent in both registries must be interrupted once.
+        for run_id in list(self._run_launches):
+            _api_runs._revoke_run_approvals(self, run_id)
         agents = {id(agent): agent for agent in (
             *self._active_run_agents.values(), *self._shutdown_interruptible_agents.values())
             if agent is not None}
@@ -2524,6 +2530,7 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
             "features": {
                 "chat_completions": True, "chat_completions_streaming": True,
                 "responses_api": True, "responses_streaming": True, "run_submission": True,
+                "run_scoped_yolo": True,
                 "runs_idempotency": _api_runs._idempotency_capabilities(self, store_type=RunIdempotencyStore),
                 **_STATIC_FEATURE_FLAGS,
                 "cors": bool(self._cors_origins),
@@ -3455,31 +3462,11 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
 
     async def _admit_to_live_bot_chat(
         self, session_id: str, message: Any, author: Optional[Dict[str, Any]],
+        *, require_run_local: bool = False,
     ) -> Optional[Tuple[Path, Dict[str, Any]]]:
-        """Admit a turn aimed at the canonical Bot Chat to the Desktop session that holds it live.
-
-        ``(profile home, mailbox record)`` when a live owner took it; None when this process should
-        run the turn itself — the session is not the canonical Bot Chat's own lineage, or nobody
-        holds that chat. Both peer transports (``/api/sessions/{id}/chat`` for ``peer dm``,
-        ``/v1/runs`` for ``peer run``) go through here, so the two lanes cannot drift.
-        """
-        if not isinstance(message, str):
-            return None
-        db = await self._ensure_session_db_async()
-        if db is None:
-            return None
-        home = Path(db.db_path).parent
-        from tools.bot_live_delivery import deliver_to_live_owner, find_canonical_live_owner
-
-        def _admit() -> Optional[Dict[str, Any]]:
-            owner = find_canonical_live_owner(home)
-            # Only the canonical Bot Chat's own lineage: a peer turn into any other session runs here.
-            if owner is None or db.get_compression_tip(session_id) != owner["session_id"]:
-                return None
-            return deliver_to_live_owner(home, owner, message, author=author)
-
-        record = await asyncio.to_thread(_admit)
-        return None if record is None else (home, record)
+        """Shared peer admission; the topical sibling owns live-owner/permission policy."""
+        return await _api_runs._admit_to_live_bot_chat(
+            self, session_id, message, author, require_run_local=require_run_local)
 
     async def _answer_through_live_bot_chat(self, ctx: Dict[str, Any]) -> Optional["web.Response"]:
         """Hand a turn aimed at a canonical Bot Chat that a Desktop holds live to that owner.
