@@ -505,6 +505,7 @@ class _RunLaunch:
     browser_control_transport_family: Any
     turn_author: Optional[Dict[str, Any]] = None  # memory-attribution label only; grants nothing
     approval_mode: Optional[str] = None
+    delegation_mode: Optional[str] = None
     approval_cancelled: threading.Event = field(default_factory=threading.Event)
     live_owner_eligible: bool = False
 
@@ -659,10 +660,13 @@ async def run_internal_session_turn(self, *, session_id: str, text: str, profile
             _api_server._api_request_profile.reset(token)
 
 
-def _run_approval_mode_error(self, request, body, *, _openai_error):
-    """Only an explicit full-profile, non-room request may opt in to YOLO."""
+def _run_request_modes_error(self, request, body, *, _openai_error):
+    """Validate delivery mode; only a full-profile, non-room request may opt in to YOLO."""
     if not isinstance(body, dict):
         return _json_error(_openai_error, "JSON body must be an object", status=400)
+    if "delegation_mode" in body and body["delegation_mode"] != "joined":
+        return _json_error(_openai_error, "'delegation_mode' must be exactly 'joined' or omitted",
+                           code="invalid_delegation_mode", status=400)
     if "approval_mode" not in body:
         return None
     if body["approval_mode"] != "yolo":
@@ -682,8 +686,8 @@ async def _admit_to_live_bot_chat(
 ) -> Optional[Tuple[Path, Dict[str, Any]]]:
     """Admit to the canonical Bot Chat's live single writer, or return None to run here.
 
-    Both peer transports share this lookup; a run-local permission cannot be
-    forwarded because the owner's mailbox carries no such authority.
+    Both peer transports share this lookup; the owner's mailbox cannot carry
+    run-local approval or delegation modes.
     """
     if not isinstance(message, str):
         return None
@@ -699,7 +703,7 @@ async def _admit_to_live_bot_chat(
         if owner is None or db.get_compression_tip(session_id) != owner["session_id"]:
             return None
         if require_run_local:
-            raise RuntimeError("Run-scoped YOLO is unavailable for a live Bot Chat owned by another executor.")
+            raise RuntimeError("Run-scoped modes are unavailable for a live Bot Chat owned by another executor.")
         return deliver_to_live_owner(home, owner, message, author=author)
 
     record = await asyncio.to_thread(_admit)
@@ -717,10 +721,11 @@ async def _handle_runs(self, request: "web.Request", *, _api_server) -> "web.Res
         body = await request.json()
     except Exception:
         return _json_error(_openai_error, "Invalid JSON", status=400)
-    mode_error = _run_approval_mode_error(self, request, body, _openai_error=_openai_error)
+    mode_error = _run_request_modes_error(self, request, body, _openai_error=_openai_error)
     if mode_error is not None:
         return mode_error
     approval_mode = body.get("approval_mode")
+    delegation_mode = body.get("delegation_mode")
     body, room_error = await self._normalize_room_dispatch(request, body)
     if room_error is not None:
         return room_error
@@ -802,15 +807,18 @@ async def _handle_runs(self, request: "web.Request", *, _api_server) -> "web.Res
     # nothing persisted to load yet.  Wake authority is fixed here, before the load can
     # overwrite ``conversation_history``: a caller-supplied history is authoritative for this
     # turn, never consumes the SessionDB delivery row, and is denied on the same contract.
-    session_history_delivery = not previous_response_id and not conversation_history
-    if not conversation_history and selected_session_id and not previous_response_id:
+    loads_session_history = not previous_response_id and not conversation_history
+    # Joined runs consume native history normally, but need child results in this
+    # turn. Deny detached delivery so the existing delegate dispatcher joins them.
+    session_history_delivery = loads_session_history and delegation_mode != "joined"
+    if loads_session_history and selected_session_id:
         conversation_history = await self._conversation_history_for_session(str(selected_session_id))
     q = self._run_streams[run_id] = _RunStream()
     created_at = self._run_streams_created[run_id] = time.time()
     self._run_approval_sessions[run_id] = run_id  # approval session key (see _RunLaunch)
     initial_status = self._set_run_status(
         run_id, "queued", created_at=created_at, session_id=session_id, model=body.get("model", self._model_name),
-        approval_mode=approval_mode or "configured")
+        approval_mode=approval_mode or "configured", delegation_mode=delegation_mode or "default")
     if idempotency_key:
         outcome, record = self._run_idempotency_store.reserve(
             idempotency_scope, idempotency_key, idempotency_fingerprint, run_id, initial_status,
@@ -832,7 +840,7 @@ async def _handle_runs(self, request: "web.Request", *, _api_server) -> "web.Res
         request_profile=_api_server._api_request_profile.get(),
         browser_control_principal=_api_server._api_request_browser_control_principal.get(),
         browser_control_transport_family=_api_server._api_request_browser_control_transport_family.get(),
-        turn_author=turn_author, approval_mode=approval_mode,
+        turn_author=turn_author, approval_mode=approval_mode, delegation_mode=delegation_mode,
         live_owner_eligible=bool(selected_session_id))
     self._run_launches[run_id] = launch
     logger.info("[api_server] admitted run=%s approval_mode=%s", run_id, approval_mode or "configured")
@@ -1067,12 +1075,12 @@ async def _execute_run(self, run: _RunLaunch, *, _api_server) -> None:
             _finish("cancelled")
             return
         # Preserve the live Bot Chat's single writer. Its mailbox does not carry
-        # run-local approval authority: reject YOLO before delivering, never
-        # silently downgrade it or run a second writer beside the Desktop lease.
+        # run-local modes: reject them before delivering, never silently drop
+        # them or run a second writer beside the Desktop lease.
         if run.live_owner_eligible:
             admitted = await self._admit_to_live_bot_chat(
                 run.session_id, run.user_message, run.turn_author,
-                require_run_local=run.approval_mode == "yolo")
+                require_run_local=run.approval_mode == "yolo" or run.delegation_mode == "joined")
             if run.approval_cancelled.is_set():
                 _finish("cancelled")
                 return

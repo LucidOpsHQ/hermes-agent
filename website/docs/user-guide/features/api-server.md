@@ -458,6 +458,33 @@ Create a new agent run. Returns a `run_id` that can be used to subscribe to prog
 
 Runs accept a simple `input` string and optional `session_id`, `instructions`, `conversation_history`, or `previous_response_id`. When `session_id` is provided, Hermes surfaces it in the run status so external UIs can correlate runs with their own conversation IDs.
 
+#### Request-scoped joined delegation
+
+Clients that need subagent results in the **same run** can feature-detect
+`features.run_scoped_joined_delegation: true` in `GET /v1/capabilities`, then
+include `"delegation_mode": "joined"` in `POST /v1/runs`. The native dispatcher
+waits for delegated children and returns their results to the parent in that
+turn; children in a batch still execute concurrently. Only the exact string
+`"joined"` is accepted. Any other supplied value, including `null`, booleans,
+arrays, or objects, returns HTTP 400 (`invalid_delegation_mode`).
+
+Omission leaves existing delegation behavior unchanged. In particular, a
+server-history session can detach children and persist their completion for
+the next client turn; that persistence does **not** wake the parent model.
+Joined mode does not disable native session-history loading or compression
+continuations, and does not require a client-supplied transcript.
+
+This setting applies only to the submitted run, independently of approval and
+model/provider settings. Native approvals, cancellation, and child limits
+still apply. Run status records `delegation_mode` as `"joined"` or `"default"`
+(the latter means normal dispatch policy, not a guarantee of background work).
+The whole request is fingerprinted for idempotency, so adding or removing this
+field with an already-used `Idempotency-Key` returns HTTP 409.
+
+A joined run targeting a canonical Bot Chat held by another live executor
+fails before mailbox delivery: that owner's mailbox cannot carry this
+request-local mode. Hermes neither drops the mode nor starts a second writer.
+
 #### Explicit run-scoped YOLO
 
 Clients can feature-detect `features.run_scoped_yolo: true` in
