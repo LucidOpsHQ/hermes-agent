@@ -260,6 +260,10 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
 class A2AAdapter(BasePlatformAdapter):
     """Inbound A2A server adapter."""
 
+    # A reply completes the request's Task; a later send has no waiting caller.
+    # Bind the existing non-push lifecycle so delegate_task joins in this turn.
+    supports_async_delivery = False
+
     def __init__(self, config, **kwargs):
         super().__init__(config=config, platform=Platform("a2a"))
         extra = getattr(config, "extra", {}) or {}

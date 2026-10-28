@@ -54,6 +54,16 @@ Peers resolved from `config.yaml` → `a2a_agents`, or a direct URL.
   which fulfils the pending per-**task** `Future` the HTTP request is blocked
   on (per-context FIFO, so concurrent same-context requests can't cross-talk);
   `on_processing_complete` resolves failures/cancellations promptly.
+- **Joined delegation:** this request/reply adapter declares
+  `supports_async_delivery = False`. The gateway binds that capability for the
+  request, so the existing native `delegate_task` non-push fallback joins child
+  work in the recipient's current turn, even for `background=true`. The recipient
+  can use the result before its final reply completes the original caller's
+  Task/context. A dispatch ACK is not a final investigation result: after Task
+  completion, a later `send()` has no caller waiting. Normal push chats retain
+  detached delivery; no approval or write permission is changed. Existing reply
+  timeouts still fail the Task, and `tasks/cancel` retains its mark-and-drop
+  semantics (it does not abort the native turn).
 - **Task store:** every task (including terminal ones, bounded to the last
   500) stays queryable via `tasks/get` / `tasks/list`, and `tasks/subscribe`
   reattaches to a running task's stream via store watchers. A watchdog fails
