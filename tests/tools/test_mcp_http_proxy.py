@@ -101,6 +101,15 @@ def test_both_client_builders_carry_proxy_mounts_next_to_the_body_cap(env_only_p
     captured = _RecordingClient.captured
     assert captured["mounts"]["https://"] is not None  # proxy restored
     assert captured["transport"] is not None  # wire-body cap still the default transport
+    assert captured["timeout"].read == 300.0  # default tool timeout keeps the old read gap
+
+    server.tool_timeout = 420
+    streams = server._streamable_http_transport(URL, {}, 5.0, True, None, None, False, set())
+    _RecordingClient.captured = {}
+    with patch.object(sdk_httpx(), "AsyncClient", _RecordingClient), \
+         patch("tools.mcp_tool.streamable_http_client", MagicMock(return_value=_async_cm((MagicMock(), MagicMock())))):
+        asyncio.run(_drive(streams))
+    assert _RecordingClient.captured["timeout"].read == 420.0  # a longer configured call is not cut at 300s
 
     _RecordingClient.captured = {}
     with patch("tools.mcp_tool.sse_client", MagicMock(return_value=_async_cm((MagicMock(), MagicMock())))) as sse, \
