@@ -540,12 +540,18 @@ def _memory_parts(agent: Any) -> List[str]:
 
 
 def _identity_parts(agent: Any, ctx_len: Optional[int]) -> Tuple[List[str], bool]:
-    """SOUL.md (primary identity; cron keeps the persona while skipping cwd
-    instructions, scoped to the agent's OWN home) or the default identity.
+    """SOUL.md persona (cron keeps it while skipping cwd instructions), scoped
+    to the agent's OWN home, or the default identity; add configured-name attribution.
     Returns ``(parts, soul_loaded)``."""
+    from agent.i18n import get_agent_name
+
+    agent_name = get_agent_name(default="")
     wants_soul = agent.load_soul_identity or not agent.skip_context_files
     _soul_content = _pb.load_soul_md(ctx_len, home_override=_agent_home(agent)) if wants_soul else None
-    return ([_soul_content], True) if _soul_content else ([DEFAULT_AGENT_IDENTITY], False)
+    if not agent_name:
+        return ([_soul_content], True) if _soul_content else ([DEFAULT_AGENT_IDENTITY], False)
+    identity = _pb.CONFIGURED_AGENT_IDENTITY_GUIDANCE.format(agent_name=agent_name)
+    return ([_soul_content, identity], True) if _soul_content else ([identity, _pb.DEFAULT_RESPONSE_STYLE], False)
 
 
 def _guidance_parts(agent: Any) -> List[str]:
