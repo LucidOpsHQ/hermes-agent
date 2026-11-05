@@ -1,6 +1,7 @@
 """A2A client tools (``a2a`` toolset): a2a_discover/call/list/history/orchestrate talk to *other*
 agents. Peers come from config.yaml ``a2a_agents: {name: {url, auth: {type: bearer, token}, timeout,
-capabilities}}``. Stdlib urllib; wire format is A2A v1.0 ``SendMessage`` (v0.3 replies still parse)."""
+capabilities, share_emails}}`` (``share_emails: true`` stops masking e-mail addresses and Message-IDs
+sent to that peer; credentials are always scrubbed). Stdlib urllib; wire format is A2A v1.0 ``SendMessage`` (v0.3 replies still parse)."""
 
 from __future__ import annotations
 
@@ -104,7 +105,7 @@ def _send_task(agent_label: str, peer: dict, message: str, context_id: str) -> t
     except Exception:
         card = None
     ctx = context_id or protocol.new_context_id()
-    safe_message = security.redact_outbound(message)
+    safe_message = security.redact_outbound(message, keep_emails=peer.get("share_emails") is True)
     # v1.0: contextId lives inside the Message, not at the params top level.
     rpc_body = {"jsonrpc": "2.0", "id": protocol.new_task_id(), "method": "SendMessage",
                 "params": {"message": protocol.text_message(protocol.ROLE_USER, safe_message, context_id=ctx)}}

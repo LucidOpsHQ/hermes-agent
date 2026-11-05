@@ -202,6 +202,29 @@ class TestOutboundRedaction:
         assert "alice@example.com" not in out
         assert "[redacted-email]" in out
 
+    def test_share_emails_keeps_message_ids_but_still_scrubs_credentials(self):
+        text = ("Authorization: Bearer opaque0123456789abcdef; source orders@shottys.com "
+                "internet_message_id <61fcc753@SJ0PR11MB6621.namprd11.prod.outlook.com>")
+        out = security.redact_outbound(text, keep_emails=True)
+        assert "opaque0123456789abcdef" not in out
+        assert "orders@shottys.com" in out
+        assert "<61fcc753@SJ0PR11MB6621.namprd11.prod.outlook.com>" in out
+
+    def test_send_task_shares_emails_only_with_opted_in_peer(self, monkeypatch):
+        from plugins.platforms.a2a import tools
+        sent = []
+        monkeypatch.setattr(tools, "_fetch_card", lambda *a, **k: None)
+        monkeypatch.setattr(tools, "_http_post_json", lambda url, body, headers, timeout: sent.append(
+            body["params"]["message"]) or {"result": {}})
+        monkeypatch.setattr(tools.protocol, "persist_message", lambda *a, **k: None)
+        monkeypatch.setattr(tools.security, "audit", lambda *a, **k: None)
+        message = "case <abc@mail.example.com>"
+        tools._send_task("lucid", {"url": "http://peer", "share_emails": True}, message, "ctx")
+        tools._send_task("other", {"url": "http://peer"}, message, "ctx")
+        texts = [str(m) for m in sent]
+        assert "<abc@mail.example.com>" in texts[0]
+        assert "abc@mail.example.com" not in texts[1] and "[redacted-email]" in texts[1]
+
     def test_plain_text_untouched(self):
         text = "The answer is 42 and the build passed."
         assert security.redact_outbound(text) == text

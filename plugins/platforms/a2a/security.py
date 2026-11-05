@@ -156,14 +156,17 @@ def wrap_inbound(peer: str, text: str) -> str:
     return PRIVACY_PREFIX.format(peer=peer or "unknown") + filter_inbound((text or "").strip())
 
 
-def redact_outbound(text: str) -> str:
+def redact_outbound(text: str, *, keep_emails: bool = False) -> str:
     """Scrub credentials (the shared egress scrub — every pattern ``agent/redact.py`` knows, fail-closed)
-    and e-mail addresses before text ships to a remote peer."""
+    and e-mail addresses before text ships to a remote peer. ``keep_emails`` (a peer's explicit
+    ``share_emails: true``) keeps addresses and Message-IDs for an internal peer that must look the
+    same email up; credentials are always scrubbed."""
     if not text:
         return text
     from agent.redact import redact_for_egress
 
-    return _EMAIL_RE.sub("[redacted-email]", redact_for_egress(text))
+    scrubbed = redact_for_egress(text)
+    return scrubbed if keep_emails else _EMAIL_RE.sub("[redacted-email]", scrubbed)
 
 
 # Blocked even in localhost-only mode — a remote peer must not make us probe internal services
