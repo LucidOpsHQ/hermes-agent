@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, List, Optional
 from tools.mcp_tool_common import _parse_boolish, _core, _resolve_tool_timeout, mcp_field
+from tools import mcp_tool_config as _config
 from tools import mcp_tool_handlers as _handlers
 from tools import mcp_tool_schema as _schema
 from tools.mcp_tool_handlers import (
@@ -404,7 +405,39 @@ def _register_server_tools(name: str, server: "MCPServerTask", config: dict) -> 
         check_fn=_make_check_fn(name), scope=lambda: _core._server_registry_scope(key), lazy=False, key=key)
     if registered:
         _write_schema_cache(name, server, config, should_register)
+        _restore_adopter_overlays(name, key)
     return registered
+
+
+def _restore_adopter_overlays(name: str, key) -> None:
+    """Give every profile that adopted the connection under *key* its tools back after the owner
+    re-published them. A park (or a reconnect that cleared the tools) deregisters them from every
+    overlay, but revival and the ``tools/list_changed`` refresh only register into the owner's
+    scope, so an adopter stayed tool-less for that server until its own next discovery pass, which
+    a gateway never runs after boot. Each adopter re-judges the connection against its own config
+    under its own home and secret scope; a refused one loses only its overlay. Never raises."""
+    with _core._lock:
+        owner = _core._server_registry_scope(key)
+        adopters = sorted(s for s in _core._server_tool_scopes.get(key, ()) if s and s != owner)
+    if not adopters:
+        return
+    from pathlib import Path
+    from agent.secret_scope import build_profile_secret_scope, reset_secret_scope, set_secret_scope
+    from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+    for adopter in adopters:
+        home_token = set_hermes_home_override(Path(adopter))
+        secret_token = set_secret_scope(build_profile_secret_scope(Path(adopter)))
+        try:
+            config = (_config._load_mcp_config() or {}).get(name)
+            # Omitted from the dict, a name is judged against this profile's config; an entry the
+            # adopter no longer has is therefore removed, not re-adopted.
+            register_connected_into_current_scope({name: config} if config is not None else {})
+        except Exception:
+            logger.warning("MCP server '%s': restoring tools for adopting profile scope %s failed",
+                           name, adopter, exc_info=True)
+        finally:
+            reset_secret_scope(secret_token)
+            reset_hermes_home_override(home_token)
 
 
 def _server_enabled(config: dict) -> bool:
@@ -465,13 +498,24 @@ def _register_connected_into_current_scope(servers: dict) -> int:
     if scope is None:
         return 0
 
+    # Callers that connect a subset (plugin go-live, a connector, orphan re-registration) pass only
+    # those names. A name they omit is judged against this profile's own config, or connecting one
+    # server would strip every other server's tools from the profile while their connections live on.
+    with _core._lock:
+        omitted = {_key_name(key) for key, scopes in _core._server_tool_scopes.items()
+                   if scope in scopes and _key_name(key) not in servers}
+    profile_servers = _config._load_mcp_config() if omitted else {}
+
     with _core._lock:
         stale = []
         for key, scopes in _core._server_tool_scopes.items():
             if scope not in scopes:
                 continue
+            name = _key_name(key)
+            if name not in servers and name not in omitted:
+                continue  # attached after the config read; the next pass judges it
             server = _core._servers.get(key)
-            config = servers.get(_key_name(key))
+            config = servers[name] if name in servers else profile_servers.get(name)
             cross_profile = _key_scope(key) != scope
             if (config is None or not _server_enabled(config) or server is None
                     or getattr(server, "session", None) is None
