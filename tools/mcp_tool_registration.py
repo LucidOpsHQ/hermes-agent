@@ -411,7 +411,42 @@ def _register_server_tools(name: str, server: "MCPServerTask", config: dict) -> 
         check_fn=_make_check_fn(name), scope=lambda: _core._server_registry_scope(key), lazy=False, key=key)
     if registered:
         _write_schema_cache(name, server, config, should_register)
+        _restore_adopter_overlays(name, key)
     return registered
+
+
+def _restore_adopter_overlays(name: str, key) -> None:
+    """Give every profile that adopted the connection under *key* its tools back after the owner
+    re-published them. A park (or a reconnect that cleared the tools) deregisters them from every
+    overlay, but revival and the ``tools/list_changed`` refresh only register into the owner's
+    scope, so an adopter stayed tool-less for that server until its own next discovery pass, which
+    a gateway never runs after boot. Each adopter re-judges the connection against its own config
+    under its own home and secret scope; a refused one loses only its overlay. Never raises."""
+    with _core._lock:
+        owner = _core._server_registry_scope(key)
+        adopters = sorted(s for s in _core._server_tool_scopes.get(key, ()) if s and s != owner)
+    if not adopters:
+        return
+    from pathlib import Path
+    from agent.secret_scope import build_profile_secret_scope, reset_secret_scope, set_secret_scope
+    from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+    for adopter in adopters:
+        home_token = secret_token = None
+        try:
+            home_token = set_hermes_home_override(adopter)
+            secret_token = set_secret_scope(build_profile_secret_scope(Path(adopter)), profile_home=adopter)
+            config = (_config._load_mcp_config() or {}).get(name)
+            # Omitted from the dict, a name is judged against this profile's config; an entry the
+            # adopter no longer has is therefore removed, not re-adopted.
+            register_connected_into_current_scope({name: config} if config is not None else {})
+        except Exception:
+            logger.warning("MCP server '%s': restoring tools for adopting profile scope %s failed",
+                           name, adopter, exc_info=True)
+        finally:
+            if secret_token is not None:
+                reset_secret_scope(secret_token)
+            if home_token is not None:
+                reset_hermes_home_override(home_token)
 
 
 def _connection_identity(config: dict) -> tuple:
